@@ -117,6 +117,10 @@ export const crmApi = {
       }),
     }),
 
+  // ---------------------------------------------------------------------------
+  // Forgot Password
+  // ---------------------------------------------------------------------------
+
   requestPasswordReset: async (
     identifier,
   ) => {
@@ -133,6 +137,27 @@ export const crmApi = {
     )
   },
 
+  // Verify OTP only.
+  // This does NOT change the password.
+  verifyPasswordResetCode: async (
+    identifier,
+    code,
+  ) => {
+    await api('/auth/csrf/')
+
+    return api(
+      '/auth/password-reset/verify/',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          identifier,
+          code,
+        }),
+      },
+    )
+  },
+
+  // Change password only after OTP has been verified.
   confirmPasswordReset: (
     identifier,
     code,

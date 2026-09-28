@@ -62,6 +62,7 @@ export const NAV_ITEMS = [
     label: 'Course Interested',
     to: '/course-interested',
     icon: BookOpen,
+    permission: 'manage_catalogue',
   },
 
   {

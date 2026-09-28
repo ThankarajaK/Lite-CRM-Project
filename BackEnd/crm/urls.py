@@ -24,6 +24,7 @@ from .views import (
     password_reset_request_view,
     sessions_revoke_all_view,
     sessions_view,
+    password_reset_verify_view,
 )
 
 
@@ -187,4 +188,8 @@ urlpatterns = [
         "",
         include(router.urls),
     ),
+    path(
+    "auth/password-reset/verify/",
+    password_reset_verify_view,
+),
 ]

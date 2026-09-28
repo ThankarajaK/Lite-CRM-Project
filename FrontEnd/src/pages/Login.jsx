@@ -7,115 +7,291 @@ import { crmApi } from '../lib/api'
 export default function Login({ onAuthenticated }) {
   const navigate = useNavigate()
 
+  // ---------------------------------------------------------------------------
+  // Modes
+  // login  = normal login
+  // request = enter email and request OTP
+  // verify = enter OTP
+  // reset  = enter new password after successful OTP verification
+  // ---------------------------------------------------------------------------
   const [mode, setMode] = useState('login')
+
+  // ---------------------------------------------------------------------------
+  // Form state
+  // ---------------------------------------------------------------------------
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
 
+  // ---------------------------------------------------------------------------
+  // Password visibility
+  // ---------------------------------------------------------------------------
   const [showPassword, setShowPassword] = useState(false)
   const [showNew, setShowNew] = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
 
+  // ---------------------------------------------------------------------------
+  // UI state
+  // ---------------------------------------------------------------------------
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
 
+  // ---------------------------------------------------------------------------
+  // Submit
+  // ---------------------------------------------------------------------------
   async function submit(event) {
     event.preventDefault()
+
     setError('')
     setMessage('')
     setSaving(true)
 
     try {
-      // -----------------------------------------
-      // LOGIN
-      // -----------------------------------------
+      // -----------------------------------------------------------------------
+      // NORMAL LOGIN
+      // -----------------------------------------------------------------------
       if (mode === 'login') {
         if (!identifier.trim() || !password) {
           throw new Error(
-            'Email/mobile number and password are required.'
+            'Email/mobile number and password are required.',
           )
         }
 
-        const user = await crmApi.login(identifier, password)
+        const user = await crmApi.login(
+          identifier.trim(),
+          password,
+        )
 
-        /*
-         * Keep the existing authentication flow.
-         * onAuthenticated updates the application auth state.
-         */
         onAuthenticated(user)
 
-        /*
-         * After successful authentication,
-         * always take the user to the Dashboard.
-         *
-         * Dashboard route:
-         * /
-         */
-        navigate('/', { replace: true })
+        navigate('/', {
+          replace: true,
+        })
 
         return
       }
 
-      // -----------------------------------------
-      // REQUEST PASSWORD RESET
-      // -----------------------------------------
+      // -----------------------------------------------------------------------
+      // PASSWORD RESET - REQUEST OTP
+      // -----------------------------------------------------------------------
       if (mode === 'request') {
-        await crmApi.requestPasswordReset(identifier)
+        if (!identifier.trim()) {
+          throw new Error(
+            'Email address is required.',
+          )
+        }
 
-        setMode('confirm')
+        // Make sure only an email address is accepted.
+        const email = identifier.trim()
+
+        const emailPattern =
+          /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+        if (!emailPattern.test(email)) {
+          throw new Error(
+            'Please enter a valid email address.',
+          )
+        }
+
+        await crmApi.requestPasswordReset(email)
+
+        // IMPORTANT:
+        // After requesting OTP, show ONLY the OTP field.
+        // New password fields are NOT shown yet.
+        setMode('verify')
 
         setMessage(
-          'If an account matches, a one-time code has been sent.'
+          'If an account matches, a one-time code has been sent to your email.',
         )
 
         return
       }
 
-      // -----------------------------------------
-      // CONFIRM PASSWORD RESET
-      // -----------------------------------------
-      if (mode === 'confirm') {
-        if (!code.trim()) {
-          throw new Error('One-time code is required.')
+      // -----------------------------------------------------------------------
+      // PASSWORD RESET - VERIFY OTP
+      // -----------------------------------------------------------------------
+      if (mode === 'verify') {
+        const otp = code.trim()
+
+        if (!otp) {
+          throw new Error(
+            'One-time code is required.',
+          )
         }
 
+        if (!/^\d{6}$/.test(otp)) {
+          throw new Error(
+            'Please enter the 6-digit one-time code.',
+          )
+        }
+
+        // IMPORTANT:
+        // This only verifies the OTP.
+        // It does NOT change the password.
+        await crmApi.verifyPasswordResetCode(
+          identifier.trim(),
+          otp,
+        )
+
+        // IMPORTANT:
+        // ONLY after successful OTP verification
+        // should the new-password screen appear.
+        setMode('reset')
+
+        setMessage(
+          'Code verified successfully. You can now create a new password.',
+        )
+
+        return
+      }
+
+      // -----------------------------------------------------------------------
+      // PASSWORD RESET - CREATE NEW PASSWORD
+      // -----------------------------------------------------------------------
+      if (mode === 'reset') {
         if (!newPassword) {
-          throw new Error('New password is required.')
+          throw new Error(
+            'New password is required.',
+          )
+        }
+
+        if (!confirmPassword) {
+          throw new Error(
+            'Confirm password is required.',
+          )
         }
 
         if (newPassword !== confirmPassword) {
           throw new Error(
-            'New password and confirm password must match.'
+            'New password and confirm password must match.',
           )
         }
 
         await crmApi.confirmPasswordReset(
-          identifier,
-          code,
-          newPassword
+          identifier.trim(),
+          code.trim(),
+          newPassword,
         )
 
+        // Return to normal login after successful reset.
         setMode('login')
         setPassword('')
         setNewPassword('')
         setConfirmPassword('')
         setCode('')
+        setShowNew(false)
+        setShowConfirm(false)
 
         setMessage(
-          'Password reset successfully. You can sign in now.'
+          'Password reset successfully. You can sign in now.',
         )
+
+        return
       }
     } catch (err) {
+      // -----------------------------------------------------------------------
+      // ERROR HANDLING
+      // -----------------------------------------------------------------------
+
+      // OTP verification errors
+      // Handle these separately so an invalid OTP never displays
+      // the normal login credential error.
+      if (mode === 'verify') {
+        if (
+          err?.status === 400 ||
+          err?.status === 401 ||
+          err?.status === 404
+        ) {
+          setError('Invalid OTP. Please enter the correct 6-digit code.')
+        } else {
+          setError(
+            err?.message ||
+              'Unable to verify the OTP. Please try again.',
+          )
+        }
+
+        return
+      }
+
+      // Password reset request errors
+      if (mode === 'request') {
+        setError(
+          err?.message ||
+            'Unable to send the reset code. Please try again.',
+        )
+
+        return
+      }
+
+      // Password reset errors
+      if (mode === 'reset') {
+        setError(
+          err?.message ||
+            'Unable to reset the password. Please try again.',
+        )
+
+        return
+      }
+
+      // Normal login lockout
+      if (err?.status === 423) {
+        setError(
+          'Your account is temporarily locked due to multiple failed login attempts. Please try again after 15 minutes.',
+        )
+
+        return
+      }
+
+      // Normal login invalid credentials
+      if (err?.status === 401) {
+        setError(
+          'Invalid email/mobile number or password.',
+        )
+
+        return
+      }
+
+      // General error
       setError(
         err?.message ||
-          'Something went wrong. Please try again.'
+          'Something went wrong. Please try again.',
       )
     } finally {
       setSaving(false)
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Reset everything and go back to login
+  // ---------------------------------------------------------------------------
+  function backToLogin() {
+    setMode('login')
+    setError('')
+    setMessage('')
+    setIdentifier('')
+    setCode('')
+    setNewPassword('')
+    setConfirmPassword('')
+    setPassword('')
+    setShowPassword(false)
+    setShowNew(false)
+    setShowConfirm(false)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Start forgot-password flow
+  // ---------------------------------------------------------------------------
+  function startForgotPassword() {
+    setMode('request')
+    setError('')
+    setMessage('')
+    setIdentifier('')
+    setCode('')
+    setNewPassword('')
+    setConfirmPassword('')
   }
 
   return (
@@ -124,9 +300,9 @@ export default function Login({ onAuthenticated }) {
         onSubmit={submit}
         className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
       >
-        {/* -----------------------------------------
+        {/* -------------------------------------------------------------------
             HEADER
-        ----------------------------------------- */}
+        ------------------------------------------------------------------- */}
         <div className="mb-6">
           <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-brand-600 font-bold text-white">
             L
@@ -141,49 +317,65 @@ export default function Login({ onAuthenticated }) {
           </p>
         </div>
 
-        {/* -----------------------------------------
-            ERROR
-        ----------------------------------------- */}
+        {/* -------------------------------------------------------------------
+            ERROR MESSAGE
+        ------------------------------------------------------------------- */}
         {error ? (
           <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
             {error}
           </div>
         ) : null}
 
-        {/* -----------------------------------------
+        {/* -------------------------------------------------------------------
             SUCCESS MESSAGE
-        ----------------------------------------- */}
+        ------------------------------------------------------------------- */}
         {message ? (
           <div className="mb-4 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-700">
             {message}
           </div>
         ) : null}
 
-        {/* -----------------------------------------
-            EMAIL / MOBILE
-        ----------------------------------------- */}
-        {mode !== 'confirm' ? (
+        {/* -------------------------------------------------------------------
+            EMAIL / MOBILE FOR NORMAL LOGIN
+            EMAIL ONLY FOR FORGOT PASSWORD
+        ------------------------------------------------------------------- */}
+        {mode === 'login' || mode === 'request' ? (
           <>
             <label className="field-label">
-              Email or mobile number
+              {mode === 'request'
+                ? 'Email address'
+                : 'Email or mobile number'}
             </label>
 
             <input
               className="field-input"
+              type={
+                mode === 'request'
+                  ? 'email'
+                  : 'text'
+              }
               value={identifier}
               onChange={(e) =>
                 setIdentifier(e.target.value)
               }
-              placeholder="name@gmail.com or +91 9876543210"
-              autoComplete="username"
+              placeholder={
+                mode === 'request'
+                  ? 'name@gmail.com'
+                  : 'name@gmail.com or +91 9876543210'
+              }
+              autoComplete={
+                mode === 'request'
+                  ? 'email'
+                  : 'username'
+              }
               required
             />
           </>
         ) : null}
 
-        {/* -----------------------------------------
-            LOGIN PASSWORD
-        ----------------------------------------- */}
+        {/* -------------------------------------------------------------------
+            NORMAL LOGIN PASSWORD
+        ------------------------------------------------------------------- */}
         {mode === 'login' ? (
           <div className="mt-4">
             <label className="field-label">
@@ -193,7 +385,9 @@ export default function Login({ onAuthenticated }) {
             <div className="relative">
               <input
                 type={
-                  showPassword ? 'text' : 'password'
+                  showPassword
+                    ? 'text'
+                    : 'password'
                 }
                 className="field-input pr-10"
                 value={password}
@@ -212,7 +406,9 @@ export default function Login({ onAuthenticated }) {
                     : 'Show password'
                 }
                 onClick={() =>
-                  setShowPassword((value) => !value)
+                  setShowPassword(
+                    (value) => !value,
+                  )
                 }
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400"
               >
@@ -226,11 +422,7 @@ export default function Login({ onAuthenticated }) {
 
             <button
               type="button"
-              onClick={() => {
-                setMode('request')
-                setError('')
-                setMessage('')
-              }}
+              onClick={startForgotPassword}
               className="mt-3 text-sm font-medium text-brand-600"
             >
               Forgot password?
@@ -238,40 +430,57 @@ export default function Login({ onAuthenticated }) {
           </div>
         ) : null}
 
-        {/* -----------------------------------------
+        {/* -------------------------------------------------------------------
             PASSWORD RESET REQUEST
-        ----------------------------------------- */}
+            EMAIL ONLY
+        ------------------------------------------------------------------- */}
         {mode === 'request' ? (
           <p className="mt-4 text-sm text-slate-500">
-            Enter your registered email or Indian mobile
-            number. We will respond generically whether the
-            account exists.
+            Enter your registered email address. We
+            will send a one-time code to your email.
           </p>
         ) : null}
 
-        {/* -----------------------------------------
-            PASSWORD RESET CONFIRM
-        ----------------------------------------- */}
-        {mode === 'confirm' ? (
+        {/* -------------------------------------------------------------------
+            OTP VERIFICATION
+            ONLY OTP IS SHOWN HERE
+        ------------------------------------------------------------------- */}
+        {mode === 'verify' ? (
+          <div className="mt-4">
+            <label className="field-label">
+              One-time code
+            </label>
+
+            <input
+              className="field-input"
+              value={code}
+              onChange={(e) => {
+                const value = e.target.value
+                  .replace(/\D/g, '')
+                  .slice(0, 6)
+
+                setCode(value)
+              }}
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="Enter 6-digit code"
+              autoComplete="one-time-code"
+              required
+            />
+
+            <p className="mt-2 text-sm text-slate-500">
+              Enter the 6-digit code sent to your
+              registered email address.
+            </p>
+          </div>
+        ) : null}
+
+        {/* -------------------------------------------------------------------
+            NEW PASSWORD
+            THIS IS SHOWN ONLY AFTER SUCCESSFUL OTP VERIFICATION
+        ------------------------------------------------------------------- */}
+        {mode === 'reset' ? (
           <div className="mt-4 space-y-4">
-            {/* OTP */}
-            <div>
-              <label className="field-label">
-                One-time code
-              </label>
-
-              <input
-                className="field-input"
-                value={code}
-                onChange={(e) =>
-                  setCode(e.target.value)
-                }
-                inputMode="numeric"
-                maxLength={6}
-                required
-              />
-            </div>
-
             {/* NEW PASSWORD */}
             <div>
               <label className="field-label">
@@ -281,12 +490,16 @@ export default function Login({ onAuthenticated }) {
               <div className="relative">
                 <input
                   type={
-                    showNew ? 'text' : 'password'
+                    showNew
+                      ? 'text'
+                      : 'password'
                   }
                   className="field-input pr-10"
                   value={newPassword}
                   onChange={(e) =>
-                    setNewPassword(e.target.value)
+                    setNewPassword(
+                      e.target.value,
+                    )
                   }
                   autoComplete="new-password"
                   required
@@ -300,7 +513,9 @@ export default function Login({ onAuthenticated }) {
                       : 'Show new password'
                   }
                   onClick={() =>
-                    setShowNew((value) => !value)
+                    setShowNew(
+                      (value) => !value,
+                    )
                   }
                   className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400"
                 >
@@ -329,7 +544,9 @@ export default function Login({ onAuthenticated }) {
                   className="field-input pr-10"
                   value={confirmPassword}
                   onChange={(e) =>
-                    setConfirmPassword(e.target.value)
+                    setConfirmPassword(
+                      e.target.value,
+                    )
                   }
                   autoComplete="new-password"
                   required
@@ -344,7 +561,7 @@ export default function Login({ onAuthenticated }) {
                   }
                   onClick={() =>
                     setShowConfirm(
-                      (value) => !value
+                      (value) => !value,
                     )
                   }
                   className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400"
@@ -360,9 +577,9 @@ export default function Login({ onAuthenticated }) {
           </div>
         ) : null}
 
-        {/* -----------------------------------------
-            SUBMIT
-        ----------------------------------------- */}
+        {/* -------------------------------------------------------------------
+            SUBMIT BUTTON
+        ------------------------------------------------------------------- */}
         <Button
           type="submit"
           disabled={saving}
@@ -374,23 +591,18 @@ export default function Login({ onAuthenticated }) {
               ? 'Sign in'
               : mode === 'request'
                 ? 'Send reset code'
-                : 'Reset password'}
+                : mode === 'verify'
+                  ? 'Verify code'
+                  : 'Reset password'}
         </Button>
 
-        {/* -----------------------------------------
+        {/* -------------------------------------------------------------------
             BACK TO LOGIN
-        ----------------------------------------- */}
+        ------------------------------------------------------------------- */}
         {mode !== 'login' ? (
           <button
             type="button"
-            onClick={() => {
-              setMode('login')
-              setError('')
-              setMessage('')
-              setCode('')
-              setNewPassword('')
-              setConfirmPassword('')
-            }}
+            onClick={backToLogin}
             className="mt-3 w-full text-sm text-slate-500 hover:text-slate-800"
           >
             Back to sign in

@@ -980,10 +980,17 @@ def login_view(request):
     lockout_minutes = settings.LOGIN_LOCKOUT_MINUTES
     valid = bool(user and user.check_password(password))
 
+    
+    
     if user and user.locked_until and user.locked_until > now:
-        audit(None, "auth.login.failed", user, after={"reason": "account_locked", "ip": _client_ip(request), "browser": request.META.get("HTTP_USER_AGENT", "")})
-        return Response({"detail": "Your email/mobile number or password is incorrect."}, status=401)
-
+            audit(None,"auth.login.failed",user,after={"reason": "account_locked","ip": _client_ip(request),"browser": request.META.get("HTTP_USER_AGENT", "", ),  },) 
+            return Response(
+        {
+            "detail": "Your account is temporarily locked due to multiple failed login attempts. Please try again after 15 minutes."
+        },
+        status=423,
+    )
+            
     if not valid or not user.is_active:
         if user and user.is_active:
             user.failed_login_attempts += 1
@@ -1076,26 +1083,100 @@ def password_change_view(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def password_reset_request_view(request):
-    identifier = normalize_identifier(request.data.get("identifier", ""))
-    user = find_user(identifier)
+    # Forgot Password accepts EMAIL ONLY.
+    # Login continues to support both email and mobile through find_user().
+    email = str(request.data.get("identifier", "")).strip().lower()
     generic = {"detail": "If an account matches, a one-time code has been sent."}
-    if not user or not user.is_active:
+
+    # Do not accept mobile numbers or other identifiers for password reset.
+    if not email or "@" not in email:
         return Response(generic)
-    PasswordResetToken.objects.filter(user=user, used_at__isnull=True).update(used_at=timezone.now())
+
+    user = User.objects.filter(email__iexact=email, is_active=True).first()
+    if not user:
+        return Response(generic)
+
+    PasswordResetToken.objects.filter(
+        user=user,
+        used_at__isnull=True,
+    ).update(used_at=timezone.now())
+
     code = f"{secrets.randbelow(1_000_000):06d}"
-    token = PasswordResetToken.objects.create(user=user, code_hash=hashlib.sha256(code.encode()).hexdigest(), expires_at=timezone.now() + timedelta(minutes=10))
-    send_mail("LiteCRM password reset code", f"Your LiteCRM password reset code is {code}. It expires in 10 minutes.", None, [user.email], fail_silently=True)
+    PasswordResetToken.objects.create(
+        user=user,
+        code_hash=hashlib.sha256(code.encode()).hexdigest(),
+        expires_at=timezone.now() + timedelta(minutes=10),
+    )
+
+    send_mail(
+        "LiteCRM password reset code",
+        f"Your LiteCRM password reset code is {code}. It expires in 10 minutes.",
+        None,
+        [user.email],
+        fail_silently=True,
+    )
     audit(user, "auth.password.reset_requested", user)
     return Response(generic)
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def password_reset_verify_view(request):
+    identifier = normalize_identifier(
+        request.data.get("identifier", "")
+    )
+    code = str(request.data.get("code", "")).strip()
+
+    user = find_user(identifier)
+
+    if not user or not user.is_active:
+        return Response(
+            {"detail": "Invalid OTP."},
+            status=400,
+        )
+
+    token = (
+        user.password_reset_tokens
+        .filter(
+            used_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        )
+        .order_by("-created_at")
+        .first()
+    )
+
+    if not token:
+        return Response(
+            {"detail": "Invalid OTP or OTP has expired."},
+            status=400,
+        )
+
+    if not secrets.compare_digest(
+        token.code_hash,
+        hashlib.sha256(code.encode()).hexdigest(),
+    ):
+        return Response(
+            {"detail": "Invalid OTP."},
+            status=400,
+        )
+
+    return Response(
+        {"detail": "OTP verified successfully."},
+        status=200,
+    )
 
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def password_reset_confirm_view(request):
-    identifier = normalize_identifier(request.data.get("identifier", ""))
+    # Password reset confirmation also accepts EMAIL ONLY.
+    email = str(request.data.get("identifier", "")).strip().lower()
     code = request.data.get("code", "")
     new_password = request.data.get("new_password", "")
-    user = find_user(identifier)
+
+    if not email or "@" not in email:
+        return Response({"detail": "The code is invalid or expired."}, status=400)
+
+    user = User.objects.filter(email__iexact=email, is_active=True).first()
     if not user:
         return Response({"detail": "The code is invalid or expired."}, status=400)
     token = user.password_reset_tokens.filter(used_at__isnull=True, expires_at__gt=timezone.now()).order_by("-created_at").first()
