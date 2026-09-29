@@ -471,9 +471,10 @@ class UserViewSet(viewsets.ViewSet):
                 is_active=True
             ).order_by("first_name", "last_name", "email")
         else:
-            raise PermissionDenied(
-                "You do not have permission to view users for lead assignment."
-            )
+            users = User.objects.select_related("role").filter(
+        pk=request.user.pk,
+        is_active=True,
+    )
 
         return Response([self._serialize_user(user) for user in users])
 

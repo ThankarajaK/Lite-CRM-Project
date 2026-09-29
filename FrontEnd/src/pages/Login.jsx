@@ -1,14 +1,19 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import {
+  useLocation,
+  useNavigate,
+} from 'react-router-dom'
 import { Eye, EyeOff } from 'lucide-react'
 import Button from '../components/ui/Button'
 import { crmApi } from '../lib/api'
 
 export default function Login({ onAuthenticated }) {
   const navigate = useNavigate()
+  const location = useLocation()
 
   // ---------------------------------------------------------------------------
   // Modes
+  // ---------------------------------------------------------------------------
   // login  = normal login
   // request = enter email and request OTP
   // verify = enter OTP
@@ -40,6 +45,60 @@ export default function Login({ onAuthenticated }) {
   const [message, setMessage] = useState('')
 
   // ---------------------------------------------------------------------------
+  // Deep-link destination
+  // ---------------------------------------------------------------------------
+  function getPostLoginDestination() {
+    // 1. React Router state
+    const stateFrom = location.state?.from
+
+    if (typeof stateFrom === 'string') {
+      return stateFrom
+    }
+
+    if (
+      stateFrom &&
+      typeof stateFrom.pathname === 'string'
+    ) {
+      const search = stateFrom.search || ''
+      const hash = stateFrom.hash || ''
+
+      return `${stateFrom.pathname}${search}${hash}`
+    }
+
+    // 2. sessionStorage
+    try {
+      const storedDestination =
+        sessionStorage.getItem(
+          'litecrm_post_login_redirect',
+        )
+
+      if (storedDestination) {
+        sessionStorage.removeItem(
+          'litecrm_post_login_redirect',
+        )
+
+        return storedDestination
+      }
+    } catch {
+      // Ignore sessionStorage errors.
+    }
+
+    // 3. Current browser URL
+    if (
+      location.pathname &&
+      location.pathname !== '/login'
+    ) {
+      const search = location.search || ''
+      const hash = location.hash || ''
+
+      return `${location.pathname}${search}${hash}`
+    }
+
+    // 4. Dashboard fallback
+    return '/'
+  }
+
+  // ---------------------------------------------------------------------------
   // Submit
   // ---------------------------------------------------------------------------
   async function submit(event) {
@@ -65,9 +124,14 @@ export default function Login({ onAuthenticated }) {
           password,
         )
 
+        // Update application authentication state.
         onAuthenticated(user)
 
-        navigate('/', {
+        // Return to the URL the user originally requested.
+        const destination =
+          getPostLoginDestination()
+
+        navigate(destination, {
           replace: true,
         })
 
@@ -84,7 +148,7 @@ export default function Login({ onAuthenticated }) {
           )
         }
 
-        // Make sure only an email address is accepted.
+        // Only email is accepted for password reset.
         const email = identifier.trim()
 
         const emailPattern =
@@ -98,9 +162,6 @@ export default function Login({ onAuthenticated }) {
 
         await crmApi.requestPasswordReset(email)
 
-        // IMPORTANT:
-        // After requesting OTP, show ONLY the OTP field.
-        // New password fields are NOT shown yet.
         setMode('verify')
 
         setMessage(
@@ -128,17 +189,11 @@ export default function Login({ onAuthenticated }) {
           )
         }
 
-        // IMPORTANT:
-        // This only verifies the OTP.
-        // It does NOT change the password.
         await crmApi.verifyPasswordResetCode(
           identifier.trim(),
           otp,
         )
 
-        // IMPORTANT:
-        // ONLY after successful OTP verification
-        // should the new-password screen appear.
         setMode('reset')
 
         setMessage(
@@ -193,19 +248,17 @@ export default function Login({ onAuthenticated }) {
       }
     } catch (err) {
       // -----------------------------------------------------------------------
-      // ERROR HANDLING
-      // -----------------------------------------------------------------------
-
       // OTP verification errors
-      // Handle these separately so an invalid OTP never displays
-      // the normal login credential error.
+      // -----------------------------------------------------------------------
       if (mode === 'verify') {
         if (
           err?.status === 400 ||
           err?.status === 401 ||
           err?.status === 404
         ) {
-          setError('Invalid OTP. Please enter the correct 6-digit code.')
+          setError(
+            'Invalid OTP. Please enter the correct 6-digit code.',
+          )
         } else {
           setError(
             err?.message ||
@@ -216,7 +269,9 @@ export default function Login({ onAuthenticated }) {
         return
       }
 
+      // -----------------------------------------------------------------------
       // Password reset request errors
+      // -----------------------------------------------------------------------
       if (mode === 'request') {
         setError(
           err?.message ||
@@ -226,7 +281,9 @@ export default function Login({ onAuthenticated }) {
         return
       }
 
+      // -----------------------------------------------------------------------
       // Password reset errors
+      // -----------------------------------------------------------------------
       if (mode === 'reset') {
         setError(
           err?.message ||
@@ -236,7 +293,9 @@ export default function Login({ onAuthenticated }) {
         return
       }
 
+      // -----------------------------------------------------------------------
       // Normal login lockout
+      // -----------------------------------------------------------------------
       if (err?.status === 423) {
         setError(
           'Your account is temporarily locked due to multiple failed login attempts. Please try again after 15 minutes.',
@@ -245,7 +304,9 @@ export default function Login({ onAuthenticated }) {
         return
       }
 
+      // -----------------------------------------------------------------------
       // Normal login invalid credentials
+      // -----------------------------------------------------------------------
       if (err?.status === 401) {
         setError(
           'Invalid email/mobile number or password.',
@@ -254,7 +315,9 @@ export default function Login({ onAuthenticated }) {
         return
       }
 
+      // -----------------------------------------------------------------------
       // General error
+      // -----------------------------------------------------------------------
       setError(
         err?.message ||
           'Something went wrong. Please try again.',
@@ -295,25 +358,201 @@ export default function Login({ onAuthenticated }) {
   }
 
   return (
-    <div className="grid min-h-screen place-items-center bg-slate-50 p-4">
+    <div
+      className="
+        relative
+        flex
+        min-h-screen
+        w-full
+        items-center
+        justify-center
+        overflow-x-hidden
+        overflow-y-auto
+        bg-gradient-to-br
+        from-blue-700
+        via-blue-600
+        to-blue-500
+        px-4
+        py-8
+        sm:px-6
+        lg:px-8
+      "
+    >
+      {/* -----------------------------------------------------------------------
+          TOP LEFT BRAND
+      ----------------------------------------------------------------------- */}
+      <div
+        className="
+          absolute
+          left-5
+          top-5
+          z-10
+          flex
+          items-center
+          gap-3
+          sm:left-8
+          sm:top-7
+          lg:left-10
+          lg:top-8
+        "
+      >
+        <div
+          className="
+            flex
+            h-12
+            w-12
+            items-center
+            justify-center
+            rounded-2xl
+            bg-white
+            text-xl
+            font-bold
+            text-blue-600
+            shadow-sm
+            sm:h-14
+            sm:w-14
+          "
+        >
+          L
+        </div>
+
+        <div>
+          <div
+            className="
+              text-lg
+              font-bold
+              leading-tight
+              tracking-tight
+              text-white
+              sm:text-xl
+            "
+          >
+            LiteCRM
+          </div>
+
+          <div
+            className="
+              mt-0.5
+              text-xs
+              font-medium
+              text-blue-100
+              sm:text-sm
+            "
+          >
+            Sales workspace
+          </div>
+        </div>
+      </div>
+
+      {/* -----------------------------------------------------------------------
+          LOGIN / RESET CARD
+      ----------------------------------------------------------------------- */}
       <form
         onSubmit={submit}
-        className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+        className="
+          relative
+          z-10
+          my-12
+          w-full
+          max-w-[640px]
+          rounded-[28px]
+          border
+          border-white/60
+          bg-white
+          px-6
+          py-8
+          shadow-[0_25px_70px_rgba(15,23,42,0.18)]
+          sm:px-10
+          sm:py-10
+          lg:px-12
+          lg:py-11
+        "
       >
         {/* -------------------------------------------------------------------
             HEADER
         ------------------------------------------------------------------- */}
-        <div className="mb-6">
-          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-brand-600 font-bold text-white">
-            L
+        <div className="mb-8">
+          {/* Lock icon / visual */}
+          <div
+            className="
+              mb-6
+              flex
+              h-16
+              w-16
+              items-center
+              justify-center
+              rounded-2xl
+              bg-blue-50
+              text-blue-600
+              sm:h-[72px]
+              sm:w-[72px]
+            "
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              className="h-8 w-8 sm:h-9 sm:w-9"
+              aria-hidden="true"
+            >
+              <rect
+                x="4"
+                y="10"
+                width="16"
+                height="10"
+                rx="2"
+              />
+              <path
+                d="M8 10V7a4 4 0 0 1 8 0v3"
+              />
+              <circle
+                cx="12"
+                cy="15"
+                r="1"
+              />
+            </svg>
           </div>
 
-          <h1 className="text-xl font-semibold text-slate-900">
-            LiteCRM
+          {/* Title */}
+          <h1
+            className="
+              text-3xl
+              font-bold
+              leading-tight
+              tracking-tight
+              text-slate-950
+              sm:text-4xl
+              lg:text-[42px]
+            "
+          >
+            {mode === 'login'
+              ? 'Welcome back'
+              : mode === 'request'
+                ? 'Reset your password'
+                : mode === 'verify'
+                  ? 'Verify your email'
+                  : 'Create a new password'}
           </h1>
 
-          <p className="mt-1 text-sm text-slate-500">
-            Secure CRM workspace
+          {/* Subtitle */}
+          <p
+            className="
+              mt-3
+              max-w-xl
+              text-base
+              leading-7
+              text-slate-500
+              sm:text-lg
+            "
+          >
+            {mode === 'login'
+              ? 'Sign in to continue to your LiteCRM workspace.'
+              : mode === 'request'
+                ? 'Enter your registered email address to receive a verification code.'
+                : mode === 'verify'
+                  ? 'Enter the 6-digit code sent to your registered email address.'
+                  : 'Choose a new password for your LiteCRM account.'}
           </p>
         </div>
 
@@ -321,7 +560,20 @@ export default function Login({ onAuthenticated }) {
             ERROR MESSAGE
         ------------------------------------------------------------------- */}
         {error ? (
-          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          <div
+            className="
+              mb-5
+              rounded-xl
+              border
+              border-red-200
+              bg-red-50
+              px-4
+              py-3
+              text-sm
+              leading-6
+              text-red-700
+            "
+          >
             {error}
           </div>
         ) : null}
@@ -330,25 +582,63 @@ export default function Login({ onAuthenticated }) {
             SUCCESS MESSAGE
         ------------------------------------------------------------------- */}
         {message ? (
-          <div className="mb-4 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-700">
+          <div
+            className="
+              mb-5
+              rounded-xl
+              border
+              border-green-200
+              bg-green-50
+              px-4
+              py-3
+              text-sm
+              leading-6
+              text-green-700
+            "
+          >
             {message}
           </div>
         ) : null}
 
         {/* -------------------------------------------------------------------
-            EMAIL / MOBILE FOR NORMAL LOGIN
-            EMAIL ONLY FOR FORGOT PASSWORD
+            EMAIL / MOBILE
         ------------------------------------------------------------------- */}
         {mode === 'login' || mode === 'request' ? (
-          <>
-            <label className="field-label">
+          <div>
+            <label
+              className="
+                mb-2
+                block
+                text-sm
+                font-semibold
+                text-slate-700
+                sm:text-base
+              "
+            >
               {mode === 'request'
                 ? 'Email address'
                 : 'Email or mobile number'}
             </label>
 
             <input
-              className="field-input"
+              className="
+                h-14
+                w-full
+                rounded-xl
+                border
+                border-slate-300
+                bg-white
+                px-4
+                text-base
+                text-slate-900
+                outline-none
+                transition
+                placeholder:text-slate-400
+                hover:border-slate-400
+                focus:border-blue-500
+                focus:ring-4
+                focus:ring-blue-100
+              "
               type={
                 mode === 'request'
                   ? 'email'
@@ -370,15 +660,24 @@ export default function Login({ onAuthenticated }) {
               }
               required
             />
-          </>
+          </div>
         ) : null}
 
         {/* -------------------------------------------------------------------
             NORMAL LOGIN PASSWORD
         ------------------------------------------------------------------- */}
         {mode === 'login' ? (
-          <div className="mt-4">
-            <label className="field-label">
+          <div className="mt-6">
+            <label
+              className="
+                mb-2
+                block
+                text-sm
+                font-semibold
+                text-slate-700
+                sm:text-base
+              "
+            >
               Password
             </label>
 
@@ -389,7 +688,25 @@ export default function Login({ onAuthenticated }) {
                     ? 'text'
                     : 'password'
                 }
-                className="field-input pr-10"
+                className="
+                  h-14
+                  w-full
+                  rounded-xl
+                  border
+                  border-slate-300
+                  bg-white
+                  px-4
+                  pr-12
+                  text-base
+                  text-slate-900
+                  outline-none
+                  transition
+                  placeholder:text-slate-400
+                  hover:border-slate-400
+                  focus:border-blue-500
+                  focus:ring-4
+                  focus:ring-blue-100
+                "
                 value={password}
                 onChange={(e) =>
                   setPassword(e.target.value)
@@ -410,49 +727,109 @@ export default function Login({ onAuthenticated }) {
                     (value) => !value,
                   )
                 }
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400"
+                className="
+                  absolute
+                  right-3
+                  top-1/2
+                  flex
+                  h-9
+                  w-9
+                  -translate-y-1/2
+                  items-center
+                  justify-center
+                  rounded-lg
+                  text-slate-400
+                  transition
+                  hover:bg-slate-50
+                  hover:text-slate-600
+                "
               >
                 {showPassword ? (
-                  <EyeOff className="h-4 w-4" />
+                  <EyeOff className="h-5 w-5" />
                 ) : (
-                  <Eye className="h-4 w-4" />
+                  <Eye className="h-5 w-5" />
                 )}
               </button>
             </div>
 
-            <button
-              type="button"
-              onClick={startForgotPassword}
-              className="mt-3 text-sm font-medium text-brand-600"
-            >
-              Forgot password?
-            </button>
+            {/* Forgot password */}
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={startForgotPassword}
+                className="
+                  text-sm
+                  font-semibold
+                  text-blue-600
+                  transition
+                  hover:text-blue-700
+                  hover:underline
+                  sm:text-base
+                "
+              >
+                Forgot password?
+              </button>
+            </div>
           </div>
         ) : null}
 
         {/* -------------------------------------------------------------------
             PASSWORD RESET REQUEST
-            EMAIL ONLY
         ------------------------------------------------------------------- */}
         {mode === 'request' ? (
-          <p className="mt-4 text-sm text-slate-500">
-            Enter your registered email address. We
-            will send a one-time code to your email.
+          <p
+            className="
+              mt-4
+              text-sm
+              leading-6
+              text-slate-500
+            "
+          >
+            Enter your registered email address.
+            We will send a one-time code to your
+            email.
           </p>
         ) : null}
 
         {/* -------------------------------------------------------------------
             OTP VERIFICATION
-            ONLY OTP IS SHOWN HERE
         ------------------------------------------------------------------- */}
         {mode === 'verify' ? (
-          <div className="mt-4">
-            <label className="field-label">
+          <div className="mt-6">
+            <label
+              className="
+                mb-2
+                block
+                text-sm
+                font-semibold
+                text-slate-700
+                sm:text-base
+              "
+            >
               One-time code
             </label>
 
             <input
-              className="field-input"
+              className="
+                h-14
+                w-full
+                rounded-xl
+                border
+                border-slate-300
+                bg-white
+                px-4
+                text-base
+                tracking-[0.25em]
+                text-slate-900
+                outline-none
+                transition
+                placeholder:text-slate-400
+                placeholder:tracking-normal
+                hover:border-slate-400
+                focus:border-blue-500
+                focus:ring-4
+                focus:ring-blue-100
+              "
               value={code}
               onChange={(e) => {
                 const value = e.target.value
@@ -468,7 +845,14 @@ export default function Login({ onAuthenticated }) {
               required
             />
 
-            <p className="mt-2 text-sm text-slate-500">
+            <p
+              className="
+                mt-2
+                text-sm
+                leading-6
+                text-slate-500
+              "
+            >
               Enter the 6-digit code sent to your
               registered email address.
             </p>
@@ -477,13 +861,21 @@ export default function Login({ onAuthenticated }) {
 
         {/* -------------------------------------------------------------------
             NEW PASSWORD
-            THIS IS SHOWN ONLY AFTER SUCCESSFUL OTP VERIFICATION
         ------------------------------------------------------------------- */}
         {mode === 'reset' ? (
-          <div className="mt-4 space-y-4">
-            {/* NEW PASSWORD */}
+          <div className="mt-6 space-y-5">
+            {/* New password */}
             <div>
-              <label className="field-label">
+              <label
+                className="
+                  mb-2
+                  block
+                  text-sm
+                  font-semibold
+                  text-slate-700
+                  sm:text-base
+                "
+              >
                 New password
               </label>
 
@@ -494,7 +886,24 @@ export default function Login({ onAuthenticated }) {
                       ? 'text'
                       : 'password'
                   }
-                  className="field-input pr-10"
+                  className="
+                    h-14
+                    w-full
+                    rounded-xl
+                    border
+                    border-slate-300
+                    bg-white
+                    px-4
+                    pr-12
+                    text-base
+                    text-slate-900
+                    outline-none
+                    transition
+                    hover:border-slate-400
+                    focus:border-blue-500
+                    focus:ring-4
+                    focus:ring-blue-100
+                  "
                   value={newPassword}
                   onChange={(e) =>
                     setNewPassword(
@@ -517,20 +926,44 @@ export default function Login({ onAuthenticated }) {
                       (value) => !value,
                     )
                   }
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400"
+                  className="
+                    absolute
+                    right-3
+                    top-1/2
+                    flex
+                    h-9
+                    w-9
+                    -translate-y-1/2
+                    items-center
+                    justify-center
+                    rounded-lg
+                    text-slate-400
+                    transition
+                    hover:bg-slate-50
+                    hover:text-slate-600
+                  "
                 >
                   {showNew ? (
-                    <EyeOff className="h-4 w-4" />
+                    <EyeOff className="h-5 w-5" />
                   ) : (
-                    <Eye className="h-4 w-4" />
+                    <Eye className="h-5 w-5" />
                   )}
                 </button>
               </div>
             </div>
 
-            {/* CONFIRM PASSWORD */}
+            {/* Confirm password */}
             <div>
-              <label className="field-label">
+              <label
+                className="
+                  mb-2
+                  block
+                  text-sm
+                  font-semibold
+                  text-slate-700
+                  sm:text-base
+                "
+              >
                 Confirm password
               </label>
 
@@ -541,7 +974,24 @@ export default function Login({ onAuthenticated }) {
                       ? 'text'
                       : 'password'
                   }
-                  className="field-input pr-10"
+                  className="
+                    h-14
+                    w-full
+                    rounded-xl
+                    border
+                    border-slate-300
+                    bg-white
+                    px-4
+                    pr-12
+                    text-base
+                    text-slate-900
+                    outline-none
+                    transition
+                    hover:border-slate-400
+                    focus:border-blue-500
+                    focus:ring-4
+                    focus:ring-blue-100
+                  "
                   value={confirmPassword}
                   onChange={(e) =>
                     setConfirmPassword(
@@ -564,12 +1014,27 @@ export default function Login({ onAuthenticated }) {
                       (value) => !value,
                     )
                   }
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400"
+                  className="
+                    absolute
+                    right-3
+                    top-1/2
+                    flex
+                    h-9
+                    w-9
+                    -translate-y-1/2
+                    items-center
+                    justify-center
+                    rounded-lg
+                    text-slate-400
+                    transition
+                    hover:bg-slate-50
+                    hover:text-slate-600
+                  "
                 >
                   {showConfirm ? (
-                    <EyeOff className="h-4 w-4" />
+                    <EyeOff className="h-5 w-5" />
                   ) : (
-                    <Eye className="h-4 w-4" />
+                    <Eye className="h-5 w-5" />
                   )}
                 </button>
               </div>
@@ -583,7 +1048,17 @@ export default function Login({ onAuthenticated }) {
         <Button
           type="submit"
           disabled={saving}
-          className="mt-6 w-full"
+          className="
+            mt-7
+            h-14
+            w-full
+            rounded-xl
+            text-base
+            font-semibold
+            shadow-sm
+            transition
+            sm:text-lg
+          "
         >
           {saving
             ? 'Please wait…'
@@ -603,12 +1078,41 @@ export default function Login({ onAuthenticated }) {
           <button
             type="button"
             onClick={backToLogin}
-            className="mt-3 w-full text-sm text-slate-500 hover:text-slate-800"
+            className="
+              mt-4
+              w-full
+              text-center
+              text-sm
+              font-medium
+              text-slate-500
+              transition
+              hover:text-slate-800
+            "
           >
             Back to sign in
           </button>
         ) : null}
       </form>
+
+      {/* -----------------------------------------------------------------------
+          BOTTOM CENTER FOOTER
+      ----------------------------------------------------------------------- */}
+      <div
+        className="
+          absolute
+          bottom-4
+          left-0
+          right-0
+          z-10
+          text-center
+          text-sm
+          font-medium
+          text-blue-100
+          sm:bottom-5
+        "
+      >
+        Secure CRM workspace
+      </div>
     </div>
   )
 }

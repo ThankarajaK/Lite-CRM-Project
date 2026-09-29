@@ -14,51 +14,194 @@ const STAGE_ACCENT = {
 }
 
 /**
- * Horizontal "New → Contacted → Proposal → Negotiation → Won" summary
- * showing the deal count and total value at each stage.
- * Scrolls horizontally on narrow screens.
+ * Responsive sales pipeline summary.
+ *
+ * Desktop:
+ * - Four stages displayed in one row.
+ *
+ * Tablet / Mobile:
+ * - Pipeline remains horizontally scrollable inside the card.
+ * - The page itself does not receive horizontal overflow.
+ *
+ * Existing calculations and pipeline behavior are preserved.
  */
 export default function PipelineSummary({ deals }) {
   const stages = useMemo(
     () =>
       PIPELINE_STAGES.map((stage) => {
-        const stageDeals = deals.filter((deal) => deal.stage === stage)
+        const stageDeals = deals.filter(
+          (deal) => deal.stage === stage
+        )
+
         return {
           stage,
           count: stageDeals.length,
-          value: stageDeals.reduce((total, deal) => total + (Number(deal.value) || 0), 0),
+          value: stageDeals.reduce(
+            (total, deal) =>
+              total + (Number(deal.value) || 0),
+            0
+          ),
         }
       }),
     [deals]
   )
 
-  const pipelineTotal = stages.reduce((total, stage) => total + stage.value, 0)
+  const pipelineTotal = stages.reduce(
+    (total, stage) => total + stage.value,
+    0
+  )
+
+  const totalDeals = stages.reduce(
+    (sum, stage) => sum + stage.count,
+    0
+  )
 
   return (
-    <Card>
+    <Card className="w-full min-w-0 overflow-hidden">
+      {/* =====================================================
+          HEADER
+          ===================================================== */}
       <CardHeader
         title="Sales Pipeline"
-        subtitle={`${formatCurrency(pipelineTotal)} across ${stages.reduce((sum, s) => sum + s.count, 0)} deals`}
+        subtitle={`${formatCurrency(
+          pipelineTotal
+        )} across ${totalDeals} ${
+          totalDeals === 1 ? 'deal' : 'deals'
+        }`}
       />
-      <div className="scrollbar-slim overflow-x-auto p-5">
-        <div className="flex min-w-max items-stretch gap-2 lg:min-w-0">
+
+      {/* =====================================================
+          PIPELINE
+          ===================================================== */}
+      <div
+        className="
+          w-full
+          min-w-0
+          overflow-x-auto
+          overflow-y-hidden
+          scrollbar-slim
+          overscroll-x-contain
+        "
+      >
+        <div
+          className="
+            flex
+            min-w-max
+            items-stretch
+            gap-2
+            p-4
+            sm:p-5
+            lg:min-w-0
+            lg:w-full
+          "
+        >
           {stages.map((stage, index) => (
-            <div key={stage.stage} className="flex flex-1 items-center gap-2">
+            <div
+              key={stage.stage}
+              className="
+                flex
+                shrink-0
+                items-center
+                gap-2
+                lg:min-w-0
+                lg:flex-1
+              "
+            >
+              {/* =================================================
+                  STAGE CARD
+                  ================================================= */}
               <div
-                className={`w-40 flex-1 rounded-lg border border-slate-200 border-t-[3px] bg-slate-50/70 px-4 py-3 ${
-                  STAGE_ACCENT[stage.stage] ?? 'border-t-slate-300'
-                }`}
+                className={`
+                  w-[145px]
+                  shrink-0
+                  min-w-0
+                  rounded-lg
+                  border
+                  border-slate-200
+                  border-t-[3px]
+                  bg-slate-50/70
+                  px-3
+                  py-3
+                  transition-colors
+                  hover:border-slate-300
+                  hover:bg-white
+                  sm:w-[160px]
+                  sm:px-4
+                  lg:w-full
+                  ${
+                    STAGE_ACCENT[stage.stage] ??
+                    'border-t-slate-300'
+                  }
+                `}
               >
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                {/* Stage */}
+                <p
+                  className="
+                    truncate
+                    text-[11px]
+                    font-semibold
+                    uppercase
+                    tracking-wide
+                    text-slate-500
+                    sm:text-xs
+                  "
+                  title={stage.stage}
+                >
                   {stage.stage}
                 </p>
-                <p className="mt-2 text-xl font-semibold text-slate-900">{stage.count}</p>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  {stage.count === 1 ? 'deal' : 'deals'} · {formatCurrency(stage.value, { compact: true })}
+
+                {/* Count */}
+                <p
+                  className="
+                    mt-1.5
+                    truncate
+                    text-xl
+                    font-semibold
+                    tracking-tight
+                    text-slate-900
+                    sm:mt-2
+                  "
+                  title={String(stage.count)}
+                >
+                  {stage.count}
+                </p>
+
+                {/* Value */}
+                <p
+                  className="
+                    mt-0.5
+                    truncate
+                    text-xs
+                    leading-5
+                    text-slate-500
+                  "
+                  title={`${stage.count === 1 ? 'deal' : 'deals'} · ${formatCurrency(
+                    stage.value,
+                    { compact: true }
+                  )}`}
+                >
+                  {stage.count === 1
+                    ? 'deal'
+                    : 'deals'}{' '}
+                  ·{' '}
+                  {formatCurrency(stage.value, {
+                    compact: true,
+                  })}
                 </p>
               </div>
+
+              {/* =================================================
+                  STAGE ARROW
+                  ================================================= */}
               {index < stages.length - 1 ? (
-                <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" aria-hidden="true" />
+                <ChevronRight
+                  className="
+                    h-4 w-4
+                    shrink-0
+                    text-slate-300
+                  "
+                  aria-hidden="true"
+                />
               ) : null}
             </div>
           ))}

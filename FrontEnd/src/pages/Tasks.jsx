@@ -20,14 +20,26 @@ import { daysFromToday } from '../utils/format'
 /** Which tasks belong in each tab. */
 const TAB_FILTERS = {
   all: () => true,
-  today: (task) => !task.completed && daysFromToday(task.dueDate) === 0,
-  upcoming: (task) => !task.completed && daysFromToday(task.dueDate) > 0,
+  today: (task) =>
+    !task.completed && daysFromToday(task.dueDate) === 0,
+  upcoming: (task) =>
+    !task.completed && daysFromToday(task.dueDate) > 0,
   completed: (task) => task.completed,
-  overdue: (task) => !task.completed && daysFromToday(task.dueDate) < 0,
+  overdue: (task) =>
+    !task.completed && daysFromToday(task.dueDate) < 0,
 }
 
 export default function Tasks() {
-  const { tasks, contacts, users, addTask, updateTask, toggleTask, deleteTask } = useData()
+  const {
+    tasks,
+    contacts,
+    users,
+    addTask,
+    updateTask,
+    toggleTask,
+    deleteTask,
+  } = useData()
+
   const toast = useToast()
   const loading = useSimulatedLoading()
 
@@ -53,6 +65,7 @@ export default function Tasks() {
 
   const visible = useMemo(() => {
     const term = query.trim().toLowerCase()
+
     return tasks
       .filter(TAB_FILTERS[tab])
       .filter((task) => {
@@ -60,6 +73,7 @@ export default function Tasks() {
           !term ||
           task.title.toLowerCase().includes(term) ||
           (task.contact ?? '').toLowerCase().includes(term)
+
         return (
           matchesTerm &&
           (!priority || task.priority === priority) &&
@@ -68,99 +82,178 @@ export default function Tasks() {
       })
       .sort((a, b) => {
         // Open tasks first, then by due date.
-        if (a.completed !== b.completed) return a.completed ? 1 : -1
+        if (a.completed !== b.completed) {
+          return a.completed ? 1 : -1
+        }
+
         return new Date(a.dueDate) - new Date(b.dueDate)
       })
   }, [tasks, tab, query, priority, assignee])
 
-  const hasFilters = Boolean(query || priority || assignee)
+  const hasFilters = Boolean(
+    query || priority || assignee
+  )
 
   async function handleToggle(task) {
     const next = await toggleTask(task.id)
+
     if (next?.completed) {
-      toast.success('Task completed', task.title)
+      toast.success(
+        'Task completed',
+        task.title
+      )
     } else {
-      toast.info('Task reopened', task.title)
+      toast.info(
+        'Task reopened',
+        task.title
+      )
     }
   }
 
   async function handleSubmit(values) {
     if (editing) {
       updateTask(editing.id, values)
-      toast.success('Task updated successfully', values.title)
+
+      toast.success(
+        'Task updated successfully',
+        values.title
+      )
     } else {
       await addTask(values)
-      toast.success('Task created successfully', values.title)
+
+      toast.success(
+        'Task created successfully',
+        values.title
+      )
     }
+
     setEditing(null)
+    setFormOpen(false)
   }
 
   function handleDelete() {
     if (!pendingDelete) return
+
     deleteTask(pendingDelete.id)
-    toast.success('Task deleted', pendingDelete.title)
+
+    toast.success(
+      'Task deleted',
+      pendingDelete.title
+    )
+
     setPendingDelete(null)
   }
 
+  function openCreateForm() {
+    setEditing(null)
+    setFormOpen(true)
+  }
+
+  function clearFilters() {
+    setQuery('')
+    setPriority('')
+    setAssignee('')
+  }
+
   return (
-    <div className="space-y-5">
+    <div className="min-w-0 space-y-5 sm:space-y-6">
+      {/* Page header */}
       <PageHeader
         title="Tasks"
         subtitle="Manage your follow-ups and activities"
         actions={
           <Button
             icon={Plus}
-            onClick={() => {
-              setEditing(null)
-              setFormOpen(true)
-            }}
+            onClick={openCreateForm}
+            className="w-full sm:w-auto"
           >
             Add Task
           </Button>
         }
       />
 
-      <Card>
-        <Tabs
-          value={tab}
-          onChange={setTab}
-          className="px-2"
-          tabs={[
-            { id: 'all', label: 'All', count: counts.all },
-            { id: 'today', label: 'Today', count: counts.today },
-            { id: 'upcoming', label: 'Upcoming', count: counts.upcoming },
-            { id: 'completed', label: 'Completed', count: counts.completed },
-            { id: 'overdue', label: 'Overdue', count: counts.overdue },
-          ]}
-        />
-
-        <div className="flex flex-col gap-3 border-b border-slate-200 p-4 sm:flex-row sm:items-center">
-          <SearchBar
-            value={query}
-            onChange={setQuery}
-            placeholder="Search tasks..."
-            className="w-full sm:max-w-xs"
+      {/* Tasks card */}
+      <Card className="min-w-0 overflow-hidden">
+        {/* Tabs */}
+        <div className="min-w-0 overflow-x-auto scrollbar-slim">
+          <Tabs
+            value={tab}
+            onChange={setTab}
+            className="min-w-max px-2"
+            tabs={[
+              {
+                id: 'all',
+                label: 'All',
+                count: counts.all,
+              },
+              {
+                id: 'today',
+                label: 'Today',
+                count: counts.today,
+              },
+              {
+                id: 'upcoming',
+                label: 'Upcoming',
+                count: counts.upcoming,
+              },
+              {
+                id: 'completed',
+                label: 'Completed',
+                count: counts.completed,
+              },
+              {
+                id: 'overdue',
+                label: 'Overdue',
+                count: counts.overdue,
+              },
+            ]}
           />
-          <div className="grid grid-cols-2 gap-2 sm:ml-auto sm:flex sm:items-center">
-            <FilterDropdown
-              label="Priority"
-              value={priority}
-              options={TASK_PRIORITIES}
-              onChange={setPriority}
-              className="sm:w-44"
-            />
-            <FilterDropdown
-              label="Assigned"
-              value={assignee}
-              options={users.map((item) => item.display_name)}
-              onChange={setAssignee}
-              className="sm:w-52"
-            />
+        </div>
+
+        {/* Search + filters */}
+        <div className="border-b border-slate-200 p-3 sm:p-4">
+          <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center">
+            {/* Search */}
+            <div className="w-full min-w-0 lg:max-w-sm">
+              <SearchBar
+                value={query}
+                onChange={setQuery}
+                placeholder="Search tasks..."
+                className="w-full"
+              />
+            </div>
+
+            {/* Filters */}
+            <div className="grid w-full min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:ml-auto lg:flex lg:w-auto lg:items-center">
+              <FilterDropdown
+                label="Priority"
+                value={priority}
+                options={TASK_PRIORITIES}
+                onChange={setPriority}
+                className="w-full lg:w-44"
+              />
+
+              <FilterDropdown
+                label="Assigned"
+                value={assignee}
+                options={users.map(
+                  (item) => item.display_name
+                )}
+                onChange={setAssignee}
+                className="w-full lg:w-52"
+              />
+            </div>
           </div>
         </div>
 
+        {/* Task list */}
         {loading ? (
-          <TableSkeleton rows={6} columns={4} />
+          <div className="min-w-0 overflow-hidden">
+            <TableSkeleton
+              rows={6}
+              columns={4}
+            />
+          </div>
         ) : visible.length === 0 ? (
           <EmptyState
             icon={CheckSquare}
@@ -180,39 +273,41 @@ export default function Tasks() {
               hasFilters ? (
                 <Button
                   variant="secondary"
-                  onClick={() => {
-                    setQuery('')
-                    setPriority('')
-                    setAssignee('')
-                  }}
+                  onClick={clearFilters}
                 >
                   Clear filters
                 </Button>
               ) : (
-                <Button icon={Plus} onClick={() => setFormOpen(true)}>
+                <Button
+                  icon={Plus}
+                  onClick={openCreateForm}
+                >
                   Add Task
                 </Button>
               )
             }
           />
         ) : (
-          <ul className="divide-y divide-slate-100">
-            {visible.map((task) => (
-              <TaskItem
-                key={task.id}
-                task={task}
-                onToggle={handleToggle}
-                onEdit={(item) => {
-                  setEditing(item)
-                  setFormOpen(true)
-                }}
-                onDelete={setPendingDelete}
-              />
-            ))}
-          </ul>
+          <div className="min-w-0 overflow-x-auto">
+            <ul className="min-w-[680px] divide-y divide-slate-100">
+              {visible.map((task) => (
+                <TaskItem
+                  key={task.id}
+                  task={task}
+                  onToggle={handleToggle}
+                  onEdit={(item) => {
+                    setEditing(item)
+                    setFormOpen(true)
+                  }}
+                  onDelete={setPendingDelete}
+                />
+              ))}
+            </ul>
+          </div>
         )}
       </Card>
 
+      {/* Task form */}
       <TaskFormModal
         open={formOpen}
         task={editing}
@@ -224,12 +319,17 @@ export default function Tasks() {
         onSubmit={handleSubmit}
       />
 
+      {/* Delete confirmation */}
       <ConfirmDialog
         open={Boolean(pendingDelete)}
         onClose={() => setPendingDelete(null)}
         onConfirm={handleDelete}
         title="Delete this task?"
-        message={pendingDelete ? `"${pendingDelete.title}" will be removed from your task list.` : ''}
+        message={
+          pendingDelete
+            ? `"${pendingDelete.title}" will be removed from your task list.`
+            : ''
+        }
         confirmLabel="Delete task"
       />
     </div>

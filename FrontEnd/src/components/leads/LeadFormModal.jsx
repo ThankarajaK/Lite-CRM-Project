@@ -218,6 +218,10 @@ export default function LeadFormModal({
         lead?.status ??
         'Not Qualified',
 
+      /*
+       * For a new Lead, the logged-in user is the
+       * default owner.
+       */
       ownerId:
         lead?.ownerId ??
         lead?.owner_id ??
@@ -296,26 +300,69 @@ export default function LeadFormModal({
 
   /*
    * ==========================================================
+   * CURRENT USER ROLE
+   * ==========================================================
+   */
+
+  const currentRoleKey =
+    String(
+      currentUser?.role ??
+        '',
+    )
+      .trim()
+      .toLowerCase()
+
+  const currentRoleName =
+    String(
+      currentUser?.role_name ??
+        '',
+    )
+      .trim()
+      .toLowerCase()
+
+  const isSalesperson =
+    currentRoleKey === 'salesperson' ||
+    currentRoleName === 'salesperson'
+
+  const isSalesManager =
+    currentRoleKey === 'sales_manager' ||
+    currentRoleName === 'sales manager'
+
+  const isAdmin =
+    currentRoleKey === 'admin' ||
+    currentRoleName === 'admin'
+
+  /*
+   * ==========================================================
    * OWNER OPTIONS
    * ==========================================================
    *
-   * ONLY ACTIVE:
+   * RULES:
    *
-   *   - Salesperson
-   *   - Sales Manager
+   * 1. Only ACTIVE users can appear.
    *
-   * are allowed in the Owner dropdown.
+   * 2. Admin users NEVER appear in the Owner dropdown.
    *
-   * Admin users must NEVER appear here.
+   * 3. Salesperson:
+   *      -> ONLY the logged-in Salesperson's own name.
    *
-   * Django serializer provides:
+   * 4. Sales Manager:
+   *      -> If they have reassignment permission:
+   *         active Salespersons + active Sales Managers.
+   *      -> Otherwise:
+   *         only themselves.
    *
-   *   role       -> admin / sales_manager / salesperson
-   *   role_name  -> Admin / Sales Manager / Salesperson
-   *   is_active  -> true / false
+   * 5. Admin:
+   *      -> active Salespersons + active Sales Managers.
+   */
+
+  /*
+   * First build the list of valid assignable users.
    *
-   * We primarily use `role`, with `role_name` as a
-   * compatibility fallback.
+   * Only active Salesperson and Sales Manager users
+   * are allowed here.
+   *
+   * Admin is intentionally excluded.
    */
   const assignableUsers = (
     users ?? []
@@ -339,76 +386,235 @@ export default function LeadFormModal({
     }
 
     /*
-     * Read the normalized role key first.
+     * Normalized role key.
      */
     const roleKey =
       String(
         item.role ??
-        '',
+          '',
       )
         .trim()
         .toLowerCase()
 
     /*
-     * Fallback for older frontend objects
-     * that may only contain role_name.
+     * Compatibility fallback.
      */
     const roleName =
       String(
         item.role_name ??
-        '',
+          '',
       )
         .trim()
         .toLowerCase()
 
-    /*
-     * Only these two roles can be Lead Owners.
-     *
-     * ADMIN IS INTENTIONALLY EXCLUDED.
-     */
-    const isSalesperson =
+    const itemIsSalesperson =
       roleKey === 'salesperson' ||
       roleName === 'salesperson'
 
-    const isSalesManager =
+    const itemIsSalesManager =
       roleKey === 'sales_manager' ||
       roleName === 'sales manager'
 
+    /*
+     * Admin is deliberately excluded.
+     */
     return (
-      isSalesperson ||
-      isSalesManager
+      itemIsSalesperson ||
+      itemIsSalesManager
     )
   })
 
   /*
-   * Respect the existing reassignment permission.
+   * ==========================================================
+   * LOGGED-IN SALESPERSON FALLBACK
+   * ==========================================================
    *
-   * If the logged-in user can reassign Leads:
-   *   -> show all ACTIVE Salesperson/Sales Manager users.
+   * Sometimes the /users/ API does not contain the currently
+   * logged-in user in exactly the same structure used by the
+   * Owner dropdown.
    *
-   * If the logged-in user cannot reassign:
-   *   -> show only the logged-in user,
-   *      provided that user is an active
-   *      Salesperson or Sales Manager.
+   * For Salesperson, we therefore use currentUser directly
+   * as the source of truth.
+   *
+   * This guarantees that the logged-in Salesperson's own
+   * name is displayed even when users[] does not contain them.
    */
-  const ownerOptions = (
-    canReassign
-      ? assignableUsers
-      : assignableUsers.filter(
-          (item) =>
-            Number(item.id) ===
-            Number(currentUser?.id),
-        )
-  ).map((item) => ({
-    value: String(item.id),
 
-    label:
-      item.display_name ??
-      item.displayName ??
-      item.name ??
-      item.username ??
-      item.email,
-  }))
+  const currentSalespersonOwner =
+    isSalesperson &&
+    currentUser?.id != null
+      ? {
+          ...currentUser,
+          id: currentUser.id,
+          display_name:
+            currentUser.display_name ??
+            currentUser.displayName ??
+            currentUser.name ??
+            currentUser.username ??
+            currentUser.email ??
+            'Current User',
+          name:
+            currentUser.name ??
+            currentUser.display_name ??
+            currentUser.displayName ??
+            currentUser.username ??
+            currentUser.email ??
+            'Current User',
+        }
+      : null
+
+  /*
+   * Build Owner dropdown according to logged-in role.
+   */
+  const ownerUsers = (() => {
+    /*
+     * ========================================================
+     * SALES PERSON
+     * ========================================================
+     *
+     * A Salesperson can create/edit Leads,
+     * but Owner must always be themselves.
+     *
+     * IMPORTANT:
+     * Use currentUser directly first.
+     *
+     * This prevents the Owner dropdown from becoming empty
+     * when the current user is missing from users[].
+     */
+    if (isSalesperson) {
+      if (currentSalespersonOwner) {
+        return [
+          currentSalespersonOwner,
+        ]
+      }
+
+      return []
+    }
+
+    /*
+     * ========================================================
+     * SALES MANAGER
+     * ========================================================
+     *
+     * If reassignment is allowed:
+     * show all active Salespersons and Sales Managers.
+     *
+     * Otherwise:
+     * show only themselves.
+     */
+    if (isSalesManager) {
+      if (canReassign) {
+        return assignableUsers
+      }
+
+      const ownUser =
+        assignableUsers.find(
+          (item) =>
+            String(item.id) ===
+            String(currentUser?.id),
+        )
+
+      if (ownUser) {
+        return [ownUser]
+      }
+
+      /*
+       * Fallback to currentUser if the API user list
+       * does not contain the logged-in manager.
+       */
+      if (currentUser?.id != null) {
+        return [
+          {
+            ...currentUser,
+            id: currentUser.id,
+            display_name:
+              currentUser.display_name ??
+              currentUser.displayName ??
+              currentUser.name ??
+              currentUser.username ??
+              currentUser.email ??
+              'Current User',
+            name:
+              currentUser.name ??
+              currentUser.display_name ??
+              currentUser.displayName ??
+              currentUser.username ??
+              currentUser.email ??
+              'Current User',
+          },
+        ]
+      }
+
+      return []
+    }
+
+    /*
+     * ========================================================
+     * ADMIN
+     * ========================================================
+     *
+     * Admin can assign Leads to active
+     * Salespersons and Sales Managers.
+     */
+    if (isAdmin) {
+      return assignableUsers
+    }
+
+    /*
+     * ========================================================
+     * SAFE FALLBACK
+     * ========================================================
+     *
+     * Never expose another user's name.
+     */
+    const ownUser =
+      assignableUsers.find(
+        (item) =>
+          String(item.id) ===
+          String(currentUser?.id),
+      )
+
+    if (ownUser) {
+      return [ownUser]
+    }
+
+    if (currentUser?.id != null) {
+      return [
+        {
+          ...currentUser,
+          id: currentUser.id,
+          display_name:
+            currentUser.display_name ??
+            currentUser.displayName ??
+            currentUser.name ??
+            currentUser.username ??
+            currentUser.email ??
+            'Current User',
+          name:
+            currentUser.name ??
+            currentUser.display_name ??
+            currentUser.displayName ??
+            currentUser.username ??
+            currentUser.email ??
+            'Current User',
+        },
+      ]
+    }
+
+    return []
+  })()
+
+  const ownerOptions =
+    ownerUsers.map((item) => ({
+      value: String(item.id),
+
+      label:
+        item.display_name ??
+        item.displayName ??
+        item.name ??
+        item.username ??
+        item.email,
+    }))
 
   const sourceOptions = (
     sources ?? []
@@ -447,6 +653,12 @@ export default function LeadFormModal({
       courseDurations ?? [],
       selectedCourseDurationId,
     )
+
+  /*
+   * ==========================================================
+   * SUBMIT
+   * ==========================================================
+   */
 
   const handleSubmit = (
     event,
@@ -509,6 +721,21 @@ export default function LeadFormModal({
       disqualification_reason:
         form.values.disqualification_reason?.trim() ||
         '',
+    }
+
+    /*
+     * ========================================================
+     * SALESPERSON OWNER SECURITY
+     * ========================================================
+     *
+     * Regardless of what the UI contains, a Salesperson
+     * can NEVER submit another user's ID as Owner.
+     *
+     * The logged-in user's ID is always forced here.
+     */
+    if (isSalesperson) {
+      values.ownerId =
+        currentUser?.id ?? ''
     }
 
     onSubmit(values)
@@ -778,9 +1005,11 @@ export default function LeadFormModal({
           htmlFor="ownerId"
           className="sm:col-span-2"
           hint={
-            canReassign
-              ? 'Only active Sales Managers and Salespersons can be selected.'
-              : 'The lead will be owned by the logged-in user.'
+            isSalesperson
+              ? 'The lead will be owned by you.'
+              : canReassign
+                ? 'Only active Sales Managers and Salespersons can be selected.'
+                : 'The lead will be owned by the logged-in user.'
           }
         >
           <Select
@@ -790,6 +1019,19 @@ export default function LeadFormModal({
             options={
               ownerOptions
             }
+
+            /*
+             * IMPORTANT:
+             *
+             * Salesperson is NOT disabled anymore.
+             *
+             * The dropdown is clickable, but it contains
+             * only the logged-in Salesperson's own name.
+             *
+             * handleSubmit() also forces the current user's
+             * ID before sending the request.
+             */
+            disabled={false}
           />
         </Field>
 

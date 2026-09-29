@@ -15,28 +15,52 @@ function NavItem({ item, collapsed, onNavigate }) {
       onClick={onNavigate}
       className={({ isActive }) =>
         cn(
-          'group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-          collapsed && 'justify-center px-0',
+          // Base item
+          'group relative flex min-h-10 w-full items-center rounded-lg text-sm font-medium',
+          'transition-all duration-150 ease-out',
+          'focus-visible:outline-none',
+
+          // Spacing
+          collapsed
+            ? 'justify-center px-0'
+            : 'gap-3 px-3',
+
+          // Active / inactive
           isActive
             ? 'bg-brand-50 text-brand-700'
-            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
+
+          // Prevent content from forcing sidebar width
+          'min-w-0 overflow-hidden'
         )
       }
     >
       {({ isActive }) => (
         <>
-          {/* Active indicator bar on the left edge */}
+          {/* Active indicator */}
           <span
+            aria-hidden="true"
             className={cn(
-              'absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-brand-600 transition-opacity',
+              'absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full',
+              'bg-brand-600 transition-opacity duration-150',
               isActive ? 'opacity-100' : 'opacity-0'
             )}
           />
 
-          <Icon className="h-[18px] w-[18px] shrink-0" />
+          {/* Icon */}
+          <Icon
+            aria-hidden="true"
+            className={cn(
+              'h-[18px] w-[18px] shrink-0',
+              isActive
+                ? 'text-brand-600'
+                : 'text-slate-500 group-hover:text-slate-700'
+            )}
+          />
 
+          {/* Label */}
           {!collapsed ? (
-            <span className="truncate">
+            <span className="min-w-0 flex-1 truncate">
               {item.label}
             </span>
           ) : null}
@@ -45,26 +69,37 @@ function NavItem({ item, collapsed, onNavigate }) {
     </NavLink>
   )
 
-  return collapsed ? (
-    <Tooltip
-      label={item.label}
-      side="right"
-      className="w-full"
-    >
-      <div className="w-full">
-        {link}
-      </div>
-    </Tooltip>
-  ) : (
-    link
-  )
+  if (collapsed) {
+    return (
+      <Tooltip
+        label={item.label}
+        side="right"
+        className="block w-full"
+      >
+        <div className="w-full">
+          {link}
+        </div>
+      </Tooltip>
+    )
+  }
+
+  return link
 }
 
 /**
- * Persistent sidebar on desktop, slide-in drawer on mobile.
+ * LiteCRM application sidebar.
  *
- * `collapsed` is desktop-only (icon rail);
- * `mobileOpen` controls the drawer.
+ * Desktop:
+ *   - Persistent sidebar
+ *   - Expandable / collapsible icon rail
+ *
+ * Tablet:
+ *   - Uses the desktop shell when lg breakpoint is reached
+ *
+ * Mobile:
+ *   - Slide-in drawer
+ *
+ * Existing permissions and navigation are preserved.
  */
 export default function Sidebar({
   collapsed,
@@ -74,131 +109,156 @@ export default function Sidebar({
   user,
 }) {
   /*
-   * Only show navigation items when the logged-in user
-   * has the permission required by that item.
+   * Preserve existing permission-based navigation.
    *
-   * Items without a permission requirement remain
-   * visible to everyone who can access the sidebar.
+   * Items without a permission requirement are visible
+   * to all authenticated users.
    */
-  const userPermissions =
-    new Set(user?.permissions ?? [])
+  const userPermissions = new Set(user?.permissions ?? [])
 
-  const hasPermission = (
-    permission,
-  ) =>
-    !permission ||
-    userPermissions.has(permission)
+  const hasPermission = (permission) =>
+    !permission || userPermissions.has(permission)
 
-  const visibleNavItems =
-    NAV_ITEMS.filter((item) =>
-      hasPermission(item.permission)
-    )
+  const visibleNavItems = NAV_ITEMS.filter((item) =>
+    hasPermission(item.permission)
+  )
 
-  const visibleBottomNavItems =
-    BOTTOM_NAV_ITEMS.filter((item) =>
-      hasPermission(item.permission)
-    )
+  const visibleBottomNavItems = BOTTOM_NAV_ITEMS.filter((item) =>
+    hasPermission(item.permission)
+  )
 
+  /**
+   * Sidebar content is shared between:
+   * - desktop expanded
+   * - desktop collapsed
+   * - mobile drawer
+   */
   const content = (isCollapsed) => (
-    <div className="flex h-full flex-col bg-white">
-      {/* Logo */}
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-white">
+
+      {/* =========================================================
+          LOGO / BRAND
+          ========================================================= */}
       <div
         className={cn(
-          'flex h-16 shrink-0 items-center gap-2.5 border-b border-slate-200 px-4',
-          isCollapsed && 'justify-center px-0'
+          'flex h-16 min-h-16 shrink-0 items-center',
+          'border-b border-slate-200',
+          isCollapsed
+            ? 'justify-center px-2'
+            : 'gap-2.5 px-4'
         )}
       >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-sm font-bold text-white">
+        {/* Logo */}
+        <span
+          className="
+            flex h-8 w-8 shrink-0 items-center justify-center
+            rounded-lg bg-brand-600
+            text-sm font-bold text-white
+            shadow-sm
+          "
+          aria-hidden="true"
+        >
           L
         </span>
 
+        {/* Brand name */}
         {!isCollapsed ? (
-          <span className="truncate text-base font-semibold tracking-tight text-slate-900">
+          <span className="min-w-0 flex-1 truncate text-base font-semibold tracking-tight text-slate-900">
             LiteCRM
           </span>
         ) : null}
 
+        {/* Mobile close */}
         <button
           type="button"
           onClick={onCloseMobile}
-          aria-label="Close menu"
-          className="ml-auto rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 lg:hidden"
+          aria-label="Close navigation menu"
+          className="
+            ml-auto flex h-9 w-9 shrink-0 items-center justify-center
+            rounded-lg text-slate-400
+            transition-colors
+            hover:bg-slate-100 hover:text-slate-700
+            focus-visible:outline-none
+            lg:hidden
+          "
         >
           <X className="h-5 w-5" />
         </button>
       </div>
 
-      {/* Main navigation */}
+      {/* =========================================================
+          MAIN NAVIGATION
+          ========================================================= */}
       <nav
+        aria-label="Main navigation"
         className={cn(
-          'flex-1 space-y-1 overflow-y-auto py-4',
-          isCollapsed
-            ? 'px-2'
-            : 'px-3'
+          'min-h-0 flex-1 overflow-x-hidden overflow-y-auto',
+          'scrollbar-slim',
+          'py-4',
+          isCollapsed ? 'px-2' : 'px-3'
         )}
       >
         {!isCollapsed ? (
-          <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+          <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
             Menu
           </p>
         ) : null}
 
-        {visibleNavItems.map(
-          (item) => (
+        <div className="space-y-1">
+          {visibleNavItems.map((item) => (
             <NavItem
               key={item.to}
               item={item}
               collapsed={isCollapsed}
-              onNavigate={
-                onCloseMobile
-              }
+              onNavigate={onCloseMobile}
             />
-          )
-        )}
+          ))}
+        </div>
       </nav>
 
-      {/* Bottom: settings + profile */}
+      {/* =========================================================
+          BOTTOM AREA
+          ========================================================= */}
       <div
         className={cn(
-          'shrink-0 space-y-1 border-t border-slate-200 py-3',
-          isCollapsed
-            ? 'px-2'
-            : 'px-3'
+          'shrink-0 border-t border-slate-200 py-3',
+          isCollapsed ? 'px-2' : 'px-3'
         )}
       >
-        {visibleBottomNavItems.map(
-          (item) => (
+        {/* Bottom navigation */}
+        <div className="space-y-1">
+          {visibleBottomNavItems.map((item) => (
             <NavItem
               key={item.to}
               item={item}
               collapsed={isCollapsed}
-              onNavigate={
-                onCloseMobile
-              }
+              onNavigate={onCloseMobile}
             />
-          )
-        )}
+          ))}
+        </div>
 
+        {/* =======================================================
+            CURRENT USER
+            ======================================================= */}
         <div
           className={cn(
-            'mt-2 flex items-center gap-3 rounded-lg px-3 py-2',
-            isCollapsed &&
-              'justify-center px-0'
+            'mt-2 flex min-w-0 items-center rounded-lg',
+            'border border-transparent',
+            'transition-colors',
+            isCollapsed
+              ? 'justify-center px-0 py-2'
+              : 'gap-3 px-3 py-2'
           )}
         >
           <Avatar
-            name={
-              user?.name ||
-              'User'
-            }
+            name={user?.name || 'User'}
             size="sm"
           />
 
           {!isCollapsed ? (
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-slate-900">
-                {user?.name ||
-                  'User'}
+                {user?.name || 'User'}
               </p>
 
               <p className="truncate text-xs text-slate-500">
@@ -213,29 +273,48 @@ export default function Sidebar({
 
   return (
     <>
-      {/* Desktop sidebar */}
+      {/* =========================================================
+          DESKTOP SIDEBAR
+          ========================================================= */}
       <aside
+        aria-label="Sidebar navigation"
         className={cn(
-          'fixed inset-y-0 left-0 z-30 hidden border-r border-slate-200 transition-[width] duration-200 lg:block',
-          collapsed
-            ? 'w-[72px]'
-            : 'w-64'
+          'fixed inset-y-0 left-0 z-30 hidden',
+          'border-r border-slate-200 bg-white',
+          'transition-[width] duration-200 ease-out',
+          'lg:block',
+          collapsed ? 'w-[72px]' : 'w-64'
         )}
       >
         {content(collapsed)}
 
-        {/* Collapse toggle sits on the sidebar edge */}
+        {/* =====================================================
+            COLLAPSE BUTTON
+            ===================================================== */}
         <button
           type="button"
-          onClick={
-            onToggleCollapse
-          }
+          onClick={onToggleCollapse}
           aria-label={
             collapsed
               ? 'Expand sidebar'
               : 'Collapse sidebar'
           }
-          className="absolute -right-3 top-20 z-10 hidden h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:bg-slate-50 hover:text-slate-700 lg:flex"
+          aria-expanded={!collapsed}
+          className="
+            absolute -right-3 top-20 z-10
+            hidden h-6 w-6 items-center justify-center
+            rounded-full
+            border border-slate-200
+            bg-white
+            text-slate-500
+            shadow-sm
+            transition-all duration-150
+            hover:bg-slate-50
+            hover:text-slate-700
+            hover:shadow
+            focus-visible:outline-none
+            lg:flex
+          "
         >
           {collapsed ? (
             <PanelLeft className="h-3.5 w-3.5" />
@@ -245,18 +324,42 @@ export default function Sidebar({
         </button>
       </aside>
 
-      {/* Mobile drawer */}
+      {/* =========================================================
+          MOBILE DRAWER
+          ========================================================= */}
       {mobileOpen ? (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <div
-            className="absolute inset-0 bg-slate-900/40 animate-fade-in"
-            onClick={
-              onCloseMobile
-            }
-            aria-hidden="true"
+        <div
+          className="fixed inset-0 z-50 lg:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Navigation menu"
+        >
+          {/* Backdrop */}
+          <button
+            type="button"
+            aria-label="Close navigation menu"
+            className="
+              absolute inset-0
+              cursor-default
+              bg-slate-950/40
+              backdrop-blur-[1px]
+              animate-fade-in
+            "
+            onClick={onCloseMobile}
           />
 
-          <div className="absolute inset-y-0 left-0 w-64 shadow-pop animate-slide-in-left">
+          {/* Drawer */}
+          <div
+            className="
+              absolute inset-y-0 left-0
+              w-[min(18rem,85vw)]
+              max-w-[85vw]
+              overflow-hidden
+              bg-white
+              shadow-pop
+              animate-slide-in-left
+            "
+          >
             {content(false)}
           </div>
         </div>

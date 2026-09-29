@@ -1,10 +1,20 @@
 import { cn } from '../../utils/format'
 
-/** White surface with a subtle border — the base of every panel in the app. */
+/**
+ * White surface with a subtle border — the base of every panel in the app.
+ *
+ * Responsive behavior:
+ * - Prevents horizontal overflow
+ * - Keeps content width constrained to the card
+ * - Preserves the existing Card API
+ */
 export default function Card({ className, children, ...props }) {
   return (
     <div
-      className={cn('rounded-xl border border-slate-200 bg-white shadow-card', className)}
+      className={cn(
+        'w-full min-w-0 max-w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-card',
+        className
+      )}
       {...props}
     >
       {children}
@@ -12,23 +22,52 @@ export default function Card({ className, children, ...props }) {
   )
 }
 
-export function CardHeader({ title, subtitle, action, className }) {
+export function CardHeader({
+  title,
+  subtitle,
+  action,
+  className,
+}) {
   return (
     <div
       className={cn(
-        'flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4',
+        'flex min-w-0 flex-col gap-3 border-b border-slate-200 px-4 py-4',
+        'sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:px-5',
         className
       )}
     >
-      <div className="min-w-0">
-        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-        {subtitle ? <p className="mt-0.5 text-sm text-slate-500">{subtitle}</p> : null}
+      {/* Title + subtitle */}
+      <div className="min-w-0 flex-1">
+        <h3 className="min-w-0 break-words text-sm font-semibold leading-5 text-slate-900">
+          {title}
+        </h3>
+
+        {subtitle ? (
+          <p className="mt-1 max-w-full break-words text-sm leading-5 text-slate-500">
+            {subtitle}
+          </p>
+        ) : null}
       </div>
-      {action ? <div className="shrink-0">{action}</div> : null}
+
+      {/* Optional action */}
+      {action ? (
+        <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+          {action}
+        </div>
+      ) : null}
     </div>
   )
 }
 
 export function CardBody({ className, children }) {
-  return <div className={cn('p-5', className)}>{children}</div>
+  return (
+    <div
+      className={cn(
+        'min-w-0 max-w-full p-4 sm:p-5',
+        className
+      )}
+    >
+      {children}
+    </div>
+  )
 }

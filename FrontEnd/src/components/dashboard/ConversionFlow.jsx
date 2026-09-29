@@ -8,8 +8,13 @@ import { cn, formatCurrency } from '../../utils/format'
  *
  *   Leads → Contacts → Open deals → Won
  *
- * Each box links to the screen where that step happens, so the dashboard
- * doubles as a map of the workflow.
+ * Responsive behavior:
+ * - Desktop: four steps in one horizontal row.
+ * - Tablet: steps remain readable with horizontal scrolling if needed.
+ * - Mobile: compact horizontal workflow that can scroll without
+ *   creating page-level horizontal overflow.
+ *
+ * Existing navigation, statistics and workflow are preserved.
  */
 export default function ConversionFlow({ stats }) {
   const steps = [
@@ -30,44 +35,160 @@ export default function ConversionFlow({ stats }) {
     {
       label: 'Open deals',
       value: stats.openDeals,
-      caption: formatCurrency(stats.pipelineValue, { compact: true }),
+      caption: formatCurrency(stats.pipelineValue, {
+        compact: true,
+      }),
       to: '/deals',
       accent: 'border-t-amber-400',
     },
     {
       label: 'Won',
       value: stats.wonDeals,
-      caption: formatCurrency(stats.wonValue, { compact: true }),
+      caption: formatCurrency(stats.wonValue, {
+        compact: true,
+      }),
       to: '/deals',
       accent: 'border-t-emerald-500',
     },
   ]
 
   return (
-    <Card>
+    <Card className="w-full min-w-0 overflow-hidden">
+      {/* =====================================================
+          HEADER
+          ===================================================== */}
       <CardHeader
         title="Sales Process"
         subtitle="Capture a lead, move it to Contacts, then open a deal"
       />
-      <div className="scrollbar-slim overflow-x-auto p-5">
-        <div className="flex min-w-max items-stretch gap-2 lg:min-w-0">
+
+      {/* =====================================================
+          WORKFLOW
+          ===================================================== */}
+      <div
+        className="
+          w-full
+          min-w-0
+          overflow-x-auto
+          overflow-y-hidden
+          scrollbar-slim
+          overscroll-x-contain
+        "
+      >
+        <div
+          className="
+            flex
+            min-w-max
+            items-stretch
+            gap-2
+            p-4
+            sm:p-5
+            lg:min-w-0
+            lg:w-full
+          "
+        >
           {steps.map((step, index) => (
-            <div key={step.label} className="flex flex-1 items-center gap-2">
+            <div
+              key={step.label}
+              className="
+                flex
+                shrink-0
+                items-center
+                gap-2
+                lg:min-w-0
+                lg:flex-1
+              "
+            >
+              {/* =================================================
+                  STEP CARD
+                  ================================================= */}
               <Link
                 to={step.to}
                 className={cn(
-                  'w-40 flex-1 rounded-lg border border-slate-200 border-t-[3px] bg-slate-50/70 px-4 py-3 transition-colors hover:border-slate-300 hover:bg-white',
+                  // Layout
+                  'block w-[145px] shrink-0 lg:w-full',
+
+                  // Shape
+                  'rounded-lg border border-slate-200',
+                  'border-t-[3px]',
+
+                  // Background
+                  'bg-slate-50/70',
+
+                  // Spacing
+                  'px-3 py-3 sm:px-4',
+
+                  // Interaction
+                  'transition-all duration-150',
+                  'hover:border-slate-300 hover:bg-white',
+                  'hover:shadow-sm',
+                  'focus-visible:outline-none',
+
+                  // Prevent text overflow
+                  'min-w-0',
+
                   step.accent
                 )}
               >
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                {/* Label */}
+                <p
+                  className="
+                    truncate
+                    text-[11px]
+                    font-semibold
+                    uppercase
+                    tracking-wide
+                    text-slate-500
+                    sm:text-xs
+                  "
+                  title={step.label}
+                >
                   {step.label}
                 </p>
-                <p className="mt-2 text-xl font-semibold text-slate-900">{step.value}</p>
-                <p className="mt-0.5 truncate text-xs text-slate-500">{step.caption}</p>
+
+                {/* Number */}
+                <p
+                  className="
+                    mt-1.5
+                    truncate
+                    text-xl
+                    font-semibold
+                    tracking-tight
+                    text-slate-900
+                    sm:mt-2
+                  "
+                  title={String(step.value)}
+                >
+                  {step.value}
+                </p>
+
+                {/* Caption */}
+                <p
+                  className="
+                    mt-0.5
+                    truncate
+                    text-xs
+                    leading-5
+                    text-slate-500
+                  "
+                  title={step.caption}
+                >
+                  {step.caption}
+                </p>
               </Link>
+
+              {/* =================================================
+                  ARROW
+                  ================================================= */}
               {index < steps.length - 1 ? (
-                <ArrowRight className="h-4 w-4 shrink-0 text-slate-300" aria-hidden="true" />
+                <ArrowRight
+                  className="
+                    h-4 w-4
+                    shrink-0
+                    text-slate-300
+                  "
+                  aria-hidden="true"
+                />
               ) : null}
             </div>
           ))}

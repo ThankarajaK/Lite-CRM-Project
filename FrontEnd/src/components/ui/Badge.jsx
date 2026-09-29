@@ -9,18 +9,45 @@ const TONES = {
   violet: 'bg-violet-50 text-violet-700 ring-violet-200',
 }
 
-/** Small pill label. Tone picks the colour; see StatusBadge for CRM statuses. */
-export default function Badge({ tone = 'gray', className, children, dot = false }) {
+/**
+ * Shared small pill label used throughout LiteCRM.
+ *
+ * - Supports predefined colour tones.
+ * - Optional status dot.
+ * - Prevents badge content from breaking the layout.
+ * - Keeps the badge compact on mobile and desktop.
+ */
+export default function Badge({
+  tone = 'gray',
+  className,
+  children,
+  dot = false,
+}) {
+  const toneClass = TONES[tone] ?? TONES.gray
+
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset',
-        TONES[tone] ?? TONES.gray,
+        'inline-flex max-w-full items-center gap-1.5',
+        'whitespace-nowrap rounded-full',
+        'px-2 py-0.5',
+        'text-xs font-medium leading-4',
+        'ring-1 ring-inset',
+        'align-middle',
+        toneClass,
         className
       )}
     >
-      {dot ? <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" /> : null}
-      {children}
+      {dot ? (
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-70"
+          aria-hidden="true"
+        />
+      ) : null}
+
+      <span className="min-w-0 truncate">
+        {children}
+      </span>
     </span>
   )
 }
