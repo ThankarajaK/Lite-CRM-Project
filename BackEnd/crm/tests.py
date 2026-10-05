@@ -6,7 +6,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from .models import CrmSession, Role, User
+from .models import CrmSession, Lead, Role, User
 
 
 @override_settings(DATABASE_URL="", EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
@@ -133,3 +133,119 @@ class LeadSprintTests(TestCase):
         response = self.client.delete(f"/api/leads/{lead_id}/")
         self.assertEqual(response.status_code, 204)
         self.assertEqual(self.client.get("/api/leads/").data["count"], 0)
+
+@override_settings(DATABASE_URL="", PASSWORD_HASHERS=["django.contrib.auth.hashers.PBKDF2PasswordHasher"])
+class LeadContactUniquenessTests(TestCase):
+    def setUp(self):
+        from crm.models import Permission, Source
+
+        self.admin_role = Role.objects.create(
+            key="admin",
+            name="Admin",
+            permissions=[p.value for p in Permission],
+        )
+        self.admin = User.objects.create_user(
+            username="admin-unique@litecrm.local",
+            email="admin-unique@litecrm.local",
+            password="Admin!234",
+            role=self.admin_role,
+        )
+        self.source = Source.objects.create(name="Website")
+        self.client = APIClient()
+        self.client.force_authenticate(self.admin)
+
+    def create_lead(self, **overrides):
+        payload = {
+            "name": "Lead One",
+            "email": "person@example.com",
+            "phone": "+919876543210",
+            "source": self.source.id,
+        }
+        payload.update(overrides)
+        return self.client.post("/api/leads/", payload, format="json")
+
+    def create_contact(self, **overrides):
+        payload = {
+            "name": "Contact One",
+            "email": "contact@example.com",
+            "phone": "+919812345678",
+            "source": self.source.id,
+        }
+        payload.update(overrides)
+        return self.client.post("/api/contacts/", payload, format="json")
+
+    def test_lead_rejects_duplicate_email_across_leads(self):
+        self.assertEqual(self.create_lead().status_code, 201)
+        response = self.create_lead(name="Lead Two", phone="+919811112222")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", response.data)
+
+    def test_lead_rejects_duplicate_phone_across_contacts(self):
+        self.assertEqual(self.create_contact().status_code, 201)
+        response = self.create_lead(email="new@example.com", phone="+919812345678")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("phone", response.data)
+
+    def test_contact_rejects_duplicate_email_across_leads(self):
+        self.assertEqual(self.create_lead().status_code, 201)
+        response = self.create_contact(email="person@example.com", phone="+919899999999")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("email", response.data)
+
+    def test_contact_rejects_duplicate_phone_across_contacts(self):
+        self.assertEqual(self.create_contact().status_code, 201)
+        response = self.create_contact(name="Contact Two", email="other@example.com")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("phone", response.data)
+
+    def test_same_record_can_be_updated_without_false_duplicate_error(self):
+        created = self.create_lead()
+        self.assertEqual(created.status_code, 201)
+        lead_id = created.data["id"]
+        response = self.client.patch(
+            f"/api/leads/{lead_id}/",
+            {"name": "Lead One Updated"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["email"], "person@example.com")
+
+    def test_lead_conversion_keeps_its_own_email_and_phone(self):
+        created = self.create_lead()
+        self.assertEqual(created.status_code, 201)
+        lead_id = created.data["id"]
+        self.assertEqual(
+            self.client.post(
+                f"/api/leads/{lead_id}/qualify/",
+                {"status": "qualified"},
+                format="json",
+            ).status_code,
+            200,
+        )
+        response = self.client.post(f"/api/leads/{lead_id}/convert/", format="json")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["contact"]["email"], "person@example.com")
+        self.assertEqual(response.data["contact"]["phone"], "+919876543210")
+
+    def test_lead_cannot_convert_if_another_contact_uses_the_same_identity(self):
+        from crm.models import Contact, Record
+
+        # Simulate an older/legacy record that already has the mobile number.
+        Contact.objects.create(
+            record=Record.objects.create(owner=self.admin),
+            name="Existing Contact",
+            email="other@example.com",
+            phone="+919876543210",
+        )
+        lead = Lead.objects.create(
+            record=Record.objects.create(owner=self.admin),
+            name="Qualified Lead",
+            email="lead@example.com",
+            phone="+919876543210",
+            source=self.source,
+            status=Lead.Status.QUALIFIED,
+        )
+
+        response = self.client.post(f"/api/leads/{lead.id}/convert/", format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("phone", response.data)

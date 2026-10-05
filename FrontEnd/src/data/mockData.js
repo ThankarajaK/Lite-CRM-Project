@@ -1,3 +1,5 @@
+import { formatCurrency } from '../utils/format'
+
 /**
  * All mock data for the LiteCRM prototype lives here.
  *
@@ -961,7 +963,7 @@ export const activities = [
     type: 'Deal created',
     actor: '',
     description: 'moved Nordic Solutions to Deals',
-    detail: 'Support Retainer · $7,200 · created at Proposal.',
+    detail: 'Support Retainer · ₹7,200 · created at Proposal.',
     company: 'Nordic Solutions',
     timestamp: hoursAgo(6),
   },
@@ -970,7 +972,7 @@ export const activities = [
     type: 'Value updated',
     actor: '',
     description: 'changed the value of Analytics Add-on — Kustvind Energi',
-    detail: '$8,400 → $9,200 during Negotiation.',
+    detail: '₹8,400 → ₹9,200 during Negotiation.',
     company: 'Kustvind Energi',
     timestamp: hoursAgo(9),
   },
@@ -997,7 +999,7 @@ export const activities = [
     type: 'Deal won',
     actor: '',
     description: 'moved Implementation — Polaris Energy to Won',
-    detail: 'Polaris Energy · $9,800.',
+    detail: 'Polaris Energy · ₹9,800.',
     company: 'Polaris Energy',
     timestamp: hoursAgo(50),
   },
@@ -1101,7 +1103,7 @@ function atDate(isoDate, hour = 9) {
 }
 
 function money(amount) {
-  return `$${(Number(amount) || 0).toLocaleString('en-US')}`
+  return formatCurrency(amount)
 }
 
 function buildAuditLog() {
@@ -1196,7 +1198,7 @@ function buildAuditLog() {
   push('r-c12', {
     type: 'Value updated',
     title: 'Value changed on Analytics Add-on — Kustvind Energi',
-    detail: '$8,400 → $9,200 during Negotiation.',
+    detail: '₹8,400 → ₹9,200 during Negotiation.',
     deal: 'Analytics Add-on — Kustvind Energi',
     actor: '',
     timestamp: hoursAgo(9),
@@ -1217,9 +1219,9 @@ export const auditLog = buildAuditLog()
 
 export const notifications = [
   { id: 'n1', title: 'Lead moved to Contacts', body: 'Nordpost Logistik is now a contact.', timestamp: hoursAgo(4), unread: true },
-  { id: 'n2', title: 'Deal value changed', body: 'Kustvind Energi raised to $9,200.', timestamp: hoursAgo(9), unread: true },
+  { id: 'n2', title: 'Deal value changed', body: 'Kustvind Energi raised to ₹9,200.', timestamp: hoursAgo(9), unread: true },
   { id: 'n3', title: 'Task due today', body: 'Call ABC Technologies at 3:00 PM.', timestamp: hoursAgo(7), unread: true },
-  { id: 'n4', title: 'Deal won', body: 'Implementation — Polaris Energy closed at $9,800.', timestamp: hoursAgo(50), unread: false },
+  { id: 'n4', title: 'Deal won', body: 'Implementation — Polaris Energy closed at ₹9,800.', timestamp: hoursAgo(50), unread: false },
 ]
 
 /* ------------------------------------------------------------------ */

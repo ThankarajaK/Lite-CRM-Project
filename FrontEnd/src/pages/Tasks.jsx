@@ -288,8 +288,8 @@ export default function Tasks() {
             }
           />
         ) : (
-          <div className="min-w-0 overflow-x-auto">
-            <ul className="min-w-[680px] divide-y divide-slate-100">
+          <div className="w-full min-w-0 overflow-hidden">
+            <ul className="w-full divide-y divide-slate-100">
               {visible.map((task) => (
                 <TaskItem
                   key={task.id}

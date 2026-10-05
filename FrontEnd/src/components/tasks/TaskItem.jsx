@@ -57,10 +57,10 @@ export default function TaskItem({ task, onToggle, onEdit, onDelete }) {
         </div>
       </div>
 
-      {/* Meta */}
-      <div className="flex shrink-0 items-center gap-2">
+      {/* Meta & Actions */}
+      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
         {overdue ? <Badge tone="red">Overdue</Badge> : null}
-        <StatusBadge status={task.priority} dot={false} className="hidden sm:inline-flex" />
+        <StatusBadge status={task.priority} dot={false} className="hidden xs:inline-flex" />
         <StatusBadge
           status={task.completed ? 'Completed' : 'Pending'}
           dot={false}
@@ -70,7 +70,7 @@ export default function TaskItem({ task, onToggle, onEdit, onDelete }) {
           <Avatar name={task.owner} size="xs" />
         </Tooltip>
 
-        <div className="flex items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+        <div className="flex items-center opacity-100 sm:opacity-0 sm:transition-opacity sm:focus-within:opacity-100 sm:group-hover:opacity-100">
           <Tooltip label="Edit task" side="top">
             <button
               type="button"

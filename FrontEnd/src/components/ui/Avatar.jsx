@@ -8,19 +8,37 @@ const SIZES = {
   xl: 'h-16 w-16 text-xl',
 }
 
-/** Initials avatar with a colour derived from the name, so it stays stable. */
-export default function Avatar({ name = '', size = 'md', className }) {
+/**
+ * Initials avatar with a colour derived from the name,
+ * so the same user keeps a stable avatar colour.
+ *
+ * Used throughout LiteCRM for users, owners and contacts.
+ */
+export default function Avatar({
+  name = '',
+  size = 'md',
+  className,
+}) {
+  const initials = getInitials(name)
+
   return (
     <span
-      title={name}
+      title={name || 'User'}
+      aria-label={name || 'User'}
       className={cn(
-        'inline-flex shrink-0 items-center justify-center rounded-full font-semibold select-none',
+        'inline-flex shrink-0 select-none items-center justify-center',
+        'overflow-hidden rounded-full',
+        'font-semibold leading-none',
+        'whitespace-nowrap',
+        'ring-1 ring-inset ring-black/5',
         getAvatarColor(name),
-        SIZES[size],
+        SIZES[size] ?? SIZES.md,
         className
       )}
     >
-      {getInitials(name)}
+      <span className="truncate">
+        {initials}
+      </span>
     </span>
   )
 }

@@ -462,54 +462,48 @@ class Lead(models.Model):
 
 
 class Contact(models.Model):
+    class Status(models.TextChoices):
+        QUALIFIED = "qualified", "Qualified"
+        NOT_QUALIFIED = "not_qualified", "Not qualified"
+
     record = models.OneToOneField(
         Record,
         on_delete=models.PROTECT,
         related_name="contact",
     )
 
-    name = models.CharField(
-        max_length=200,
-    )
-
-    company = models.CharField(
-        max_length=200,
-    )
-
-    email = models.EmailField()
-
-    phone = models.CharField(
-        max_length=50,
-        blank=True,
-    )
-
+    # Name is the only required Contact field.
+    name = models.CharField(max_length=200)
+    company = models.CharField(max_length=200, null=True, blank=True)
+    email = models.EmailField(null=True, blank=True)
+    phone = models.CharField(max_length=50, null=True, blank=True)
     source = models.ForeignKey(
-        Source,
-        on_delete=models.PROTECT,
+        Source, on_delete=models.PROTECT, null=True, blank=True,
     )
-
-    notes = models.TextField(
-        blank=True,
+    product = models.ForeignKey(
+        "Product", on_delete=models.PROTECT, related_name="contacts",
+        null=True, blank=True,
     )
-
-    industry = models.CharField(
-        max_length=100,
-        blank=True,
+    learning_mode = models.ForeignKey(
+        LearningMode, on_delete=models.PROTECT, related_name="contacts",
+        null=True, blank=True,
     )
-
-    location = models.CharField(
-        max_length=200,
-        blank=True,
+    course_duration = models.ForeignKey(
+        CourseDuration, on_delete=models.PROTECT, related_name="contacts",
+        null=True, blank=True,
     )
-
-    became_contact_at = models.DateTimeField(
-        auto_now_add=True,
+    town_city = models.CharField(max_length=150, null=True, blank=True)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, null=True, blank=True,
     )
-
-    deleted_at = models.DateTimeField(
-        null=True,
-        blank=True,
+    disqualification_reason = models.CharField(
+        max_length=100, null=True, blank=True,
     )
+    notes = models.TextField(null=True, blank=True)
+    industry = models.CharField(max_length=100, null=True, blank=True)
+    location = models.CharField(max_length=200, null=True, blank=True)
+    became_contact_at = models.DateTimeField(auto_now_add=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
 
 
 class Product(models.Model):
@@ -741,6 +735,57 @@ class HistoryEvent(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        
+ 
+class ImportBatch(models.Model):
+    """Tracks a bulk lead import so the batch can be audited and reversed."""
+
+    batch_id = models.CharField(
+        max_length=32,
+        unique=True,
+    )
+
+    file_name = models.CharField(
+        max_length=255,
+    )
+
+    imported_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="lead_import_batches",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    total_rows = models.PositiveIntegerField(
+        default=0,
+    )
+
+    created_count = models.PositiveIntegerField(
+        default=0,
+    )
+
+    updated_count = models.PositiveIntegerField(
+        default=0,
+    )
+
+    skipped_count = models.PositiveIntegerField(
+        default=0,
+    )
+
+    failed_count = models.PositiveIntegerField(
+        default=0,
+    )
+
+    reversed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["-created_at"]        
 
 
 class AuditEvent(models.Model):

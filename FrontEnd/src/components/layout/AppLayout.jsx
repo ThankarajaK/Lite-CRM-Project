@@ -65,7 +65,7 @@ export default function AppLayout({ user, onLogout }) {
 
         <ConnectivityBanner />
 
-        <main className="min-w-0 flex-1 px-3 py-4 sm:px-6 sm:py-8">
+        <main className="crm-main min-w-0 flex-1 px-3 py-4 sm:px-6 sm:py-8">
           <div className="mx-auto w-full min-w-0 max-w-[1400px]">
             <Outlet />
           </div>

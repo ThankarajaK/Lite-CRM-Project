@@ -3,15 +3,15 @@
  * Everything here is pure presentation — no data fetching, no side effects.
  */
 
-/** Format a number as USD, e.g. 8500 -> "$8,500". */
+/** Format a number as Indian Rupees, e.g. 8500 -> "₹8,500". */
 export function formatCurrency(value, { compact = false } = {}) {
   const amount = Number(value) || 0
   if (compact && Math.abs(amount) >= 1000) {
-    return `$${(amount / 1000).toFixed(amount % 1000 === 0 ? 0 : 1)}k`
+    return `₹${(amount / 1000).toFixed(amount % 1000 === 0 ? 0 : 1)}k`
   }
-  return amount.toLocaleString('en-US', {
+  return amount.toLocaleString('en-IN', {
     style: 'currency',
-    currency: 'USD',
+    currency: 'INR',
     maximumFractionDigits: 0,
   })
 }

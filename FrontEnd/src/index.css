@@ -571,3 +571,206 @@
     scroll-behavior: auto !important;
   }
 }
+/* ============================================================
+   FINAL RESPONSIVE / UX HARDENING
+   ============================================================ */
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --crm-page-bg: #f8fafc;
+    --crm-surface: #ffffff;
+    --crm-border: #e2e8f0;
+    --crm-text: #0f172a;
+    --crm-muted: #64748b;
+    --crm-brand: #2563eb;
+    --crm-control-height: 42px;
+  }
+
+  body {
+    overflow-x: hidden;
+    background: var(--crm-page-bg);
+  }
+
+  #root {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  button,
+  [role='button'],
+  select,
+  input[type='checkbox'],
+  input[type='radio'] {
+    touch-action: manipulation;
+  }
+
+  input,
+  select,
+  textarea {
+    max-width: 100%;
+  }
+}
+
+@layer components {
+  .crm-control {
+    min-height: var(--crm-control-height);
+  }
+
+  .crm-surface {
+    @apply min-w-0 max-w-full rounded-2xl border border-slate-200 bg-white shadow-card;
+  }
+
+  .crm-toolbar {
+    @apply flex min-w-0 flex-col gap-3;
+  }
+
+  .crm-toolbar-row {
+    @apply flex min-w-0 flex-wrap items-center gap-2;
+  }
+
+  .crm-actions {
+    @apply flex min-w-0 flex-wrap items-center gap-2;
+  }
+
+  .crm-page-section {
+    @apply min-w-0 space-y-4 sm:space-y-5 lg:space-y-6;
+  }
+
+  .crm-stat-grid {
+    @apply grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:gap-4 xl:grid-cols-4;
+  }
+
+  .crm-form-grid {
+    @apply grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2;
+  }
+
+  .crm-form-grid-3 {
+    @apply grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3;
+  }
+
+  .crm-mobile-stack {
+    @apply flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center;
+  }
+
+  .crm-truncate-safe {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .crm-table-shell {
+    @apply min-w-0 max-w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card;
+  }
+
+  .crm-page-header {
+    min-width: 0;
+  }
+
+  .crm-page-header-actions {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .field-label {
+    margin-bottom: 0.375rem;
+    font-size: 0.8125rem;
+  }
+
+  .field-input {
+    min-height: 42px;
+    border-radius: 0.75rem;
+    padding-top: 0.625rem;
+    padding-bottom: 0.625rem;
+  }
+
+  textarea.field-input {
+    min-height: 92px;
+  }
+
+  .crm-btn-primary,
+  .crm-btn-secondary,
+  .crm-btn-danger {
+    min-height: 42px;
+  }
+
+  .crm-table-container {
+    border-radius: 1rem;
+  }
+
+  .crm-empty-state {
+    padding: 2rem 1rem;
+    border-radius: 1rem;
+  }
+
+  /* Keep dropdowns inside the viewport even when a page has narrow padding. */
+  [role='listbox'],
+  [role='menu'] {
+    max-width: calc(100vw - 1rem);
+  }
+
+  /* Compact page rhythm on phones without changing desktop density. */
+  main {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 430px) {
+  .page-title {
+    font-size: 1.125rem;
+  }
+
+  .page-description {
+    line-height: 1.4;
+  }
+
+  .crm-actions > button,
+  .crm-actions > a {
+    max-width: 100%;
+  }
+
+  .crm-mobile-full {
+    width: 100%;
+  }
+}
+
+@media (max-width: 375px) {
+  .crm-actions {
+    width: 100%;
+  }
+
+  .crm-actions > button,
+  .crm-actions > a {
+    flex: 1 1 auto;
+  }
+}
+
+/* Respect users who prefer reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ============================================================
+   LEADS / MOBILE TEXT SAFETY
+   ============================================================ */
+
+@media (max-width: 375px) {
+  /* Avoid accidental page-width growth from long CRM labels. */
+  .page-description,
+  .crm-truncate-safe {
+    overflow-wrap: anywhere;
+  }
+}

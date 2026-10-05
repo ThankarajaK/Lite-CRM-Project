@@ -15,6 +15,9 @@ import Card, { CardHeader } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Avatar from '../components/ui/Avatar'
 import Badge from '../components/ui/Badge'
+import Table, { TBody, TD, TH, THead, TR } from '../components/ui/Table'
+import EmptyState from '../components/ui/EmptyState'
+import { TableSkeleton } from '../components/ui/Skeleton'
 import { Field, Input, Select } from '../components/ui/FormField'
 
 import { useToast } from '../context/ToastContext'
@@ -707,306 +710,338 @@ export default function UserManagement() {
 
 
         {loading ? (
-          <div className="rounded-lg border border-slate-200 p-8 text-center text-sm text-slate-500">
-            Loading users…
+          <div className="p-4">
+            <TableSkeleton rows={5} columns={5} />
           </div>
         ) : users.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center">
-            <Users className="mx-auto h-7 w-7 text-slate-300" />
-
-            <p className="mt-2 text-sm text-slate-500">
-              No users were found.
-            </p>
-          </div>
+          <EmptyState
+            icon={Users}
+            title="No users found"
+            message="No user accounts match your search or filter."
+            action={
+              <Button
+                icon={UserPlus}
+                onClick={() => {
+                  setShowForm(true)
+                  setEditingUser(null)
+                  setForm({
+                    username: '',
+                    name: '',
+                    email: '',
+                    mobile: '',
+                    role: 'salesperson',
+                    password: '',
+                  })
+                }}
+              >
+                Add User
+              </Button>
+            }
+          />
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <>
+            {/* Desktop / tablet table (>=768px) */}
+            <div className="hidden min-w-0 overflow-x-auto min-[768px]:block">
+              <Table className="min-w-[760px]">
+                <THead>
+                  <TR>
+                    <TH>User</TH>
+                    <TH>Contact</TH>
+                    <TH>Role</TH>
+                    <TH>Status</TH>
+                    <TH className="text-right">Actions</TH>
+                  </TR>
+                </THead>
 
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <TBody>
+                  {users.map((target) => {
+                    const targetRole = getRoleKey(target)
+                    const busy = actionId === target.id
+                    const isCurrentUser = target.id === currentUser?.id
+                    const passwordPanelOpen = showPasswordFor === target.id
 
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium text-slate-500">
-                    User
-                  </th>
-
-                  <th className="px-4 py-3 text-left font-medium text-slate-500">
-                    Contact
-                  </th>
-
-                  <th className="px-4 py-3 text-left font-medium text-slate-500">
-                    Role
-                  </th>
-
-                  <th className="px-4 py-3 text-left font-medium text-slate-500">
-                    Status
-                  </th>
-
-                  <th className="px-4 py-3 text-right font-medium text-slate-500">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-
-
-              <tbody className="divide-y divide-slate-100 bg-white">
-
-                {users.map((target) => {
-                  const targetRole =
-                    getRoleKey(target)
-
-                  const busy =
-                    actionId === target.id
-
-                  const isCurrentUser =
-                    target.id === currentUser?.id
-
-                  const passwordPanelOpen =
-                    showPasswordFor === target.id
-
-                  return (
-                    <tr key={target.id}>
-
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <Avatar
-                            name={getUserDisplayName(target)}
-                            size="sm"
-                          />
-
-                          <div className="min-w-0">
-                            <p className="truncate font-medium text-slate-900">
-                              {getUserDisplayName(target)}
-
-                              {isCurrentUser && (
-                                <span className="ml-1 text-xs font-normal text-brand-600">
-                                  (You)
-                                </span>
-                              )}
-                            </p>
-
-                            <p className="truncate text-xs text-slate-500">
-                              {target.username ||
-                                'No username'}
-                            </p>
-                          </div>
-                        </div>
-                      </td>
-
-
-                      <td className="px-4 py-3">
-                        <p className="text-slate-700">
-                          {target.email || '—'}
-                        </p>
-
-                        <p className="text-xs text-slate-400">
-                          {target.mobile ||
-                            'No mobile'}
-                        </p>
-                      </td>
-
-
-                      <td className="px-4 py-3">
-                        <Badge tone="blue">
-                          {target.role_name ||
-                            target.role?.name ||
-                            targetRole ||
-                            'No role'}
-                        </Badge>
-                      </td>
-
-
-                      <td className="px-4 py-3">
-                        <Badge
-                          tone={
-                            target.is_active
-                              ? 'green'
-                              : 'slate'
-                          }
-                        >
-                          {target.is_active
-                            ? 'Active'
-                            : 'Inactive'}
-                        </Badge>
-                      </td>
-
-
-                      <td className="px-4 py-3">
-
-                        <div className="flex flex-wrap justify-end gap-2">
-
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            onClick={() =>
-                              startEdit(target)
-                            }
-                            disabled={busy}
-                          >
-                            <Pencil className="mr-1 h-3.5 w-3.5" />
-                            Edit
-                          </Button>
-
-
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => {
-                              const opening =
-                                showPasswordFor !==
-                                target.id
-
-                              setShowPasswordFor(
-                                opening
-                                  ? target.id
-                                  : null
-                              )
-
-                              setPasswordValue('')
-                              setShowAdminPassword(false)
-
-                              if (opening) {
-                                setShowForm(false)
-                                setEditingUser(null)
-                              }
-                            }}
-                            disabled={busy}
-                          >
-                            <KeyRound className="mr-1 h-3.5 w-3.5" />
-                            Password
-                          </Button>
-
-
-                          <Button
-                            type="button"
-                            variant={
-                              target.is_active
-                                ? 'danger'
-                                : 'secondary'
-                            }
-                            size="sm"
-                            onClick={() =>
-                              toggleStatus(target)
-                            }
-                            disabled={
-                              busy ||
-                              isCurrentUser
-                            }
-                          >
-                            {target.is_active ? (
-                              <UserX className="mr-1 h-3.5 w-3.5" />
-                            ) : (
-                              <UserCheck className="mr-1 h-3.5 w-3.5" />
-                            )}
-
-                            {target.is_active
-                              ? 'Deactivate'
-                              : 'Activate'}
-                          </Button>
-
-                        </div>
-
-
-                        {passwordPanelOpen && (
-                          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-
-                              <div className="min-w-0 flex-1">
-
-                                <Field
-                                  label="New password"
-                                  htmlFor={`admin-password-${target.id}`}
-                                >
-                                  <div className="relative">
-
-                                    <Input
-                                      id={`admin-password-${target.id}`}
-                                      type={
-                                        showAdminPassword
-                                          ? 'text'
-                                          : 'password'
-                                      }
-                                      value={passwordValue}
-                                      autoComplete="new-password"
-                                      onChange={(event) =>
-                                        setPasswordValue(
-                                          event.target.value
-                                        )
-                                      }
-                                      placeholder="Minimum 8 characters"
-                                      className="pr-10"
-                                    />
-
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setShowAdminPassword(
-                                          (value) =>
-                                            !value
-                                        )
-                                      }
-                                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:text-slate-600"
-                                      aria-label={
-                                        showAdminPassword
-                                          ? 'Hide new password'
-                                          : 'Show new password'
-                                      }
-                                    >
-                                      {showAdminPassword ? (
-                                        <EyeOff className="h-4 w-4" />
-                                      ) : (
-                                        <Eye className="h-4 w-4" />
-                                      )}
-                                    </button>
-
-                                  </div>
-                                </Field>
-
-                              </div>
-
-
-                              <Button
-                                type="button"
-                                size="sm"
-                                onClick={() =>
-                                  savePassword(target)
-                                }
-                                disabled={
-                                  busy ||
-                                  !passwordValue
-                                }
-                              >
-                                {busy
-                                  ? 'Saving…'
-                                  : 'Set password'}
-                              </Button>
-
+                    return (
+                      <TR key={target.id}>
+                        <TD>
+                          <div className="flex items-center gap-3">
+                            <Avatar name={getUserDisplayName(target)} size="sm" />
+                            <div className="min-w-0">
+                              <p className="truncate font-medium text-slate-900">
+                                {getUserDisplayName(target)}
+                                {isCurrentUser && (
+                                  <span className="ml-1 text-xs font-normal text-brand-600">
+                                    (You)
+                                  </span>
+                                )}
+                              </p>
+                              <p className="truncate text-xs text-slate-500">
+                                {target.username || 'No username'}
+                              </p>
                             </div>
-
-
-                            <p className="mt-2 text-xs text-slate-500">
-                              Minimum 8 characters,
-                              including at least one
-                              uppercase character and
-                              one special character.
-                            </p>
-
                           </div>
+                        </TD>
+
+                        <TD>
+                          <p className="text-slate-700">{target.email || '—'}</p>
+                          <p className="text-xs text-slate-400">{target.mobile || 'No mobile'}</p>
+                        </TD>
+
+                        <TD>
+                          <Badge tone="blue">
+                            {target.role_name || target.role?.name || targetRole || 'No role'}
+                          </Badge>
+                        </TD>
+
+                        <TD>
+                          <Badge tone={target.is_active ? 'green' : 'slate'}>
+                            {target.is_active ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </TD>
+
+                        <TD>
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => startEdit(target)}
+                              disabled={busy}
+                            >
+                              <Pencil className="mr-1 h-3.5 w-3.5" />
+                              Edit
+                            </Button>
+
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => {
+                                const opening = showPasswordFor !== target.id
+                                setShowPasswordFor(opening ? target.id : null)
+                                setPasswordValue('')
+                                setShowAdminPassword(false)
+                                if (opening) {
+                                  setShowForm(false)
+                                  setEditingUser(null)
+                                }
+                              }}
+                              disabled={busy}
+                            >
+                              <KeyRound className="mr-1 h-3.5 w-3.5" />
+                              Password
+                            </Button>
+
+                            <Button
+                              type="button"
+                              variant={target.is_active ? 'danger' : 'secondary'}
+                              size="sm"
+                              onClick={() => toggleStatus(target)}
+                              disabled={busy || isCurrentUser}
+                            >
+                              {target.is_active ? (
+                                <UserX className="mr-1 h-3.5 w-3.5" />
+                              ) : (
+                                <UserCheck className="mr-1 h-3.5 w-3.5" />
+                              )}
+                              {target.is_active ? 'Deactivate' : 'Activate'}
+                            </Button>
+                          </div>
+
+                          {passwordPanelOpen && (
+                            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                                <div className="min-w-0 flex-1">
+                                  <Field label="New password" htmlFor={`admin-password-${target.id}`}>
+                                    <div className="relative">
+                                      <Input
+                                        id={`admin-password-${target.id}`}
+                                        type={showAdminPassword ? 'text' : 'password'}
+                                        value={passwordValue}
+                                        autoComplete="new-password"
+                                        onChange={(event) => setPasswordValue(event.target.value)}
+                                        placeholder="Minimum 8 characters"
+                                        className="pr-10"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => setShowAdminPassword((value) => !value)}
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:text-slate-600"
+                                        aria-label={showAdminPassword ? 'Hide new password' : 'Show new password'}
+                                      >
+                                        {showAdminPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                      </button>
+                                    </div>
+                                  </Field>
+                                </div>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  onClick={() => savePassword(target)}
+                                  disabled={busy || !passwordValue}
+                                >
+                                  {busy ? 'Saving…' : 'Set password'}
+                                </Button>
+                              </div>
+                              <p className="mt-2 text-xs text-slate-500">
+                                Minimum 8 characters, including at least one uppercase character and one special character.
+                              </p>
+                            </div>
+                          )}
+                        </TD>
+                      </TR>
+                    )
+                  })}
+                </TBody>
+              </Table>
+            </div>
+
+            {/* Mobile cards (<768px) */}
+            <div className="space-y-3 p-3 min-[768px]:hidden">
+              {users.map((target) => {
+                const targetRole = getRoleKey(target)
+                const busy = actionId === target.id
+                const isCurrentUser = target.id === currentUser?.id
+                const passwordPanelOpen = showPasswordFor === target.id
+
+                return (
+                  <article
+                    key={`mobile-user-${target.id}`}
+                    className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                        <Avatar name={getUserDisplayName(target)} size="md" />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-semibold text-sm text-slate-900">
+                            {getUserDisplayName(target)}
+                            {isCurrentUser && (
+                              <span className="ml-1 text-xs font-normal text-brand-600">
+                                (You)
+                              </span>
+                            )}
+                          </p>
+                          <p className="truncate text-xs text-slate-500">
+                            {target.username || 'No username'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-col items-end gap-1">
+                        <Badge tone="blue">
+                          {target.role_name || target.role?.name || targetRole || 'No role'}
+                        </Badge>
+                        <Badge tone={target.is_active ? 'green' : 'slate'}>
+                          {target.is_active ? 'Active' : 'Inactive'}
+                        </Badge>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 border-t border-slate-100 pt-3 text-xs space-y-1">
+                      <p className="text-slate-600 truncate">
+                        <span className="text-slate-400">Email: </span>
+                        {target.email || '—'}
+                      </p>
+                      <p className="text-slate-600 truncate">
+                        <span className="text-slate-400">Mobile: </span>
+                        {target.mobile || '—'}
+                      </p>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => startEdit(target)}
+                        disabled={busy}
+                        className="flex-1"
+                      >
+                        <Pencil className="mr-1 h-3.5 w-3.5" />
+                        Edit
+                      </Button>
+
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          const opening = showPasswordFor !== target.id
+                          setShowPasswordFor(opening ? target.id : null)
+                          setPasswordValue('')
+                          setShowAdminPassword(false)
+                          if (opening) {
+                            setShowForm(false)
+                            setEditingUser(null)
+                          }
+                        }}
+                        disabled={busy}
+                        className="flex-1"
+                      >
+                        <KeyRound className="mr-1 h-3.5 w-3.5" />
+                        Password
+                      </Button>
+
+                      <Button
+                        type="button"
+                        variant={target.is_active ? 'danger' : 'secondary'}
+                        size="sm"
+                        onClick={() => toggleStatus(target)}
+                        disabled={busy || isCurrentUser}
+                        className="w-full sm:w-auto"
+                      >
+                        {target.is_active ? (
+                          <UserX className="mr-1 h-3.5 w-3.5" />
+                        ) : (
+                          <UserCheck className="mr-1 h-3.5 w-3.5" />
                         )}
+                        {target.is_active ? 'Deactivate' : 'Activate'}
+                      </Button>
+                    </div>
 
-                      </td>
+                    {passwordPanelOpen && (
+                      <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex flex-col gap-3">
+                          <Field label="New password" htmlFor={`mobile-admin-password-${target.id}`}>
+                            <div className="relative">
+                              <Input
+                                id={`mobile-admin-password-${target.id}`}
+                                type={showAdminPassword ? 'text' : 'password'}
+                                value={passwordValue}
+                                autoComplete="new-password"
+                                onChange={(event) => setPasswordValue(event.target.value)}
+                                placeholder="Minimum 8 characters"
+                                className="pr-10"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowAdminPassword((value) => !value)}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:text-slate-600"
+                                aria-label={showAdminPassword ? 'Hide new password' : 'Show new password'}
+                              >
+                                {showAdminPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                              </button>
+                            </div>
+                          </Field>
 
-                    </tr>
-                  )
-                })}
-
-              </tbody>
-
-            </table>
-
-          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => savePassword(target)}
+                            disabled={busy || !passwordValue}
+                            className="w-full"
+                          >
+                            {busy ? 'Saving…' : 'Set password'}
+                          </Button>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-500">
+                          Minimum 8 characters, including at least one uppercase character and one special character.
+                        </p>
+                      </div>
+                    )}
+                  </article>
+                )
+              })}
+            </div>
+          </>
         )}
 
       </div>

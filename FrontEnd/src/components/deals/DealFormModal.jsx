@@ -73,7 +73,7 @@ export default function DealFormModal({ open, onClose, onSubmit, deal }) {
         </Field>
 
         <Field
-          label="Value (USD)"
+          label="Value (INR ₹)"
           htmlFor="value"
           required
           error={form.field('value').error}

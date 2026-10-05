@@ -1,9 +1,10 @@
-import { CheckCircle2, Info, X, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react'
 import { cn } from '../../utils/format'
 
 const VARIANTS = {
   success: { icon: CheckCircle2, ring: 'text-emerald-600', bar: 'bg-emerald-500' },
   error: { icon: XCircle, ring: 'text-red-600', bar: 'bg-red-500' },
+  warning: { icon: AlertTriangle, ring: 'text-amber-600', bar: 'bg-amber-500' },
   info: { icon: Info, ring: 'text-brand-600', bar: 'bg-brand-500' },
 }
 
@@ -15,7 +16,7 @@ export default function ToastContainer({ toasts, onDismiss }) {
   if (toasts.length === 0) return null
 
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-full max-w-sm flex-col gap-2 px-4 sm:px-0">
+    <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-[calc(100vw-2rem)] max-w-sm flex-col gap-2">
       {toasts.map((toast) => {
         const variant = VARIANTS[toast.variant] ?? VARIANTS.info
         const Icon = variant.icon

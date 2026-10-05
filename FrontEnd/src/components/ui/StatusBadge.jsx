@@ -31,6 +31,11 @@ const STATUS_TONES = {
   Active: 'green',
   'At risk': 'amber',
   Inactive: 'gray',
+
+  // User roles
+  Admin: 'violet',
+  'Sales Manager': 'blue',
+  Salesperson: 'gray',
 }
 
 /**

@@ -11,16 +11,29 @@ from django.contrib.auth.password_validation import validate_password
 from django.conf import settings
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.db.models.deletion import ProtectedError
+from django.db import transaction
+from django.http import HttpResponse
 from django.db.models import Q
 from django.utils import timezone
+from django.core.validators import validate_email
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
-from .models import Activity, Contact, CrmSession, Deal, Lead, Notification, PasswordResetToken, Permission, Product, Record, Role, Source, Task, User, LearningMode, CourseDuration
+from .models import Activity, Contact, CrmSession, Deal, ImportBatch, Lead, Notification, PasswordResetToken, Permission, Product, Record, Role, Source, Task, User, LearningMode, CourseDuration
 from .serializers import ActivitySerializer, ContactSerializer, DealSerializer, HistorySerializer, LeadSerializer, ProductSerializer, RoleSerializer, SourceSerializer, TaskSerializer, UserSummarySerializer, LearningModeSerializer, CourseDurationSerializer
-from .services import assert_visible, audit, convert_lead, history, record_is_visible
+from .services import (
+    assert_visible,
+    audit,
+    convert_lead,
+    history,
+    record_is_visible,
+    normalize_email,
+    normalize_phone,
+    validate_unique_contact_details,
+)
 from .authentication import find_user, normalize_identifier
 
 
@@ -215,10 +228,371 @@ class LeadViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="import-template")
     def import_template(self, request):
+        """Download a workbook documenting every import column and accepted values."""
         require_permission(request, "import_leads")
-        response = Response("name,company,email,phone,product,learning_mode,course_duration,town_city,source,status,notes\n", content_type="text/csv")
-        response["Content-Disposition"] = 'attachment; filename="litecrm-leads-template.csv"'
+        from openpyxl import Workbook
+        from openpyxl.utils import get_column_letter
+
+        columns = [
+            ("name", "Name", "Required. Lead name."),
+            ("company", "Company", "Optional."),
+            ("email", "Email", "Optional. If provided, must be a valid email address."),
+            ("phone", "Phone", "Optional. Indian mobile numbers are accepted."),
+            ("source", "Source", "Optional. If provided, must exactly match an active Lead Source."),
+            ("product", "Course Interested", "Optional. Must match an active Product."),
+            ("learning_mode", "Preferred Learning Mode", "Optional. Must match an active Learning Mode."),
+            ("course_duration", "Preferred Course Duration", "Optional. Must match an active Course Duration."),
+            ("town_city", "Town / City", "Optional."),
+            ("status", "Status", "Optional. Accepted values are listed on the Accepted Values sheet."),
+            ("notes", "Lead Feedback", "Optional."),
+        ]
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Lead Import Template"
+        for index, (_, label, _) in enumerate(columns, start=1):
+            sheet.cell(row=1, column=index, value=label)
+            sheet.column_dimensions[get_column_letter(index)].width = max(18, len(label) + 4)
+
+        values = workbook.create_sheet("Accepted Values")
+        values.append(["Field", "Accepted value"])
+        values.append(["Source", "Use active Lead Sources from the CRM."])
+        for source in Source.objects.filter(active=True).order_by("name"):
+            values.append(["Source", source.name])
+        values.append(["Course Interested", "Use active Products from the CRM."])
+        for product in Product.objects.filter(active=True).order_by("name"):
+            values.append(["Course Interested", product.name])
+        values.append(["Preferred Learning Mode", "Use active Learning Modes from the CRM."])
+        for mode in LearningMode.objects.filter(active=True).order_by("name"):
+            values.append(["Preferred Learning Mode", mode.name])
+        values.append(["Preferred Course Duration", "Use active Course Durations from the CRM."])
+        for duration in CourseDuration.objects.filter(active=True).order_by("name"):
+            values.append(["Preferred Course Duration", duration.name])
+        for value, label in Lead.Status.choices:
+            values.append(["Status", value])
+            values.append(["Status", label])
+        values.append(["Duplicate action", "skip"])
+        values.append(["Duplicate action", "update"])
+
+        instructions = workbook.create_sheet("Instructions")
+        instructions.append(["LiteCRM Bulk Lead Import"])
+        instructions.append(["Required fields", "Name"])
+        instructions.append(["Duplicate handling", "Duplicates are flagged during preview. Choose skip, import anyway, or update before importing."])
+        instructions.append(["Validation", "Rows with errors must be fixed or explicitly skipped before anything is written."])
+        instructions.append(["Accepted values", "Use the Accepted Values sheet for active master-data values."])
+
+        output = io.BytesIO()
+        workbook.save(output)
+        output.seek(0)
+        response = HttpResponse(
+            output.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = 'attachment; filename="litecrm-leads-template.xlsx"'
         return response
+
+    @staticmethod
+    def _normalise_import_header(value):
+        return " ".join(str(value or "").strip().lower().replace("_", " ").replace("-", " ").split())
+
+    @classmethod
+    def _import_column_aliases(cls):
+        return {
+            "name": "name",
+            "lead name": "name",
+            "company": "company",
+            "email": "email",
+            "email address": "email",
+            "phone": "phone",
+            "mobile": "phone",
+            "mobile number": "phone",
+            "source": "source",
+            "lead source": "source",
+            "product": "product",
+            "course": "product",
+            "course interested": "product",
+            "learning mode": "learning_mode",
+            "preferred learning mode": "learning_mode",
+            "course duration": "course_duration",
+            "preferred course duration": "course_duration",
+            "town city": "town_city",
+            "town / city": "town_city",
+            "town/city": "town_city",
+            "city": "town_city",
+            "status": "status",
+            "lead feedback": "notes",
+            "notes": "notes",
+        }
+
+    @classmethod
+    def _parse_import_upload(cls, upload):
+        filename = str(upload.name or "").lower()
+        if filename.endswith(".xlsx"):
+            from openpyxl import load_workbook
+            workbook = load_workbook(upload, read_only=True, data_only=True)
+            sheet = workbook.active
+            rows = list(sheet.iter_rows(values_only=True))
+            workbook.close()
+            if not rows:
+                raise ValueError("The file is empty.")
+            headers = [str(value or "").strip() for value in rows[0]]
+            data = []
+            for row in rows[1:]:
+                if not any(value not in (None, "") for value in row):
+                    continue
+                data.append({headers[index]: row[index] if index < len(row) else "" for index in range(len(headers))})
+            return headers, data
+        if filename.endswith(".csv"):
+            text = upload.read().decode("utf-8-sig")
+            reader = csv.DictReader(io.StringIO(text))
+            headers = [str(value or "").strip() for value in (reader.fieldnames or [])]
+            if not headers:
+                raise ValueError("The file does not contain a header row.")
+            return headers, list(reader)
+        raise ValueError("Only CSV and XLSX files are supported.")
+
+    @classmethod
+    def _suggest_import_mapping(cls, headers):
+        aliases = cls._import_column_aliases()
+        mapping = {}
+        used = set()
+        for header in headers:
+            canonical = aliases.get(cls._normalise_import_header(header))
+            if canonical and canonical not in mapping and header not in used:
+                mapping[canonical] = header
+                used.add(header)
+        return mapping
+
+    @classmethod
+    def _apply_import_mapping(cls, raw_row, mapping):
+        if not mapping:
+            mapping = cls._suggest_import_mapping(list(raw_row.keys()))
+        result = {}
+        for canonical, source_header in mapping.items():
+            if source_header in raw_row:
+                result[canonical] = raw_row.get(source_header)
+        # Accept mappings supplied as source-header -> canonical as well.
+        if not result:
+            aliases = cls._import_column_aliases()
+            for source_header, canonical in mapping.items():
+                if canonical in aliases:
+                    canonical = aliases[canonical]
+                if source_header in raw_row:
+                    result[canonical] = raw_row.get(source_header)
+        return {key: "" if value is None else str(value).strip() for key, value in result.items()}
+
+    @classmethod
+    def _import_reference_values(cls):
+        return {
+            "source": set(Source.objects.filter(active=True).values_list("name", flat=True)),
+            "product": set(Product.objects.filter(active=True).values_list("name", flat=True)),
+            "learning_mode": set(LearningMode.objects.filter(active=True).values_list("name", flat=True)),
+            "course_duration": set(CourseDuration.objects.filter(active=True).values_list("name", flat=True)),
+            "status": set(Lead.Status.values),
+        }
+
+    @classmethod
+    def _lookup_ci(cls, model, name):
+        if not name:
+            return None
+        return model.objects.filter(name__iexact=name, active=True).first()
+
+    @classmethod
+    def _validate_import_row(cls, row, row_number, refs):
+        errors = []
+        name = str(row.get("name", "")).strip()
+        email = str(row.get("email", "")).strip().lower()
+        source_name = str(row.get("source", "")).strip()
+        product_name = str(row.get("product", "")).strip()
+        learning_mode_name = str(row.get("learning_mode", "")).strip()
+        duration_name = str(row.get("course_duration", "")).strip()
+        status_value = str(row.get("status", "")).strip().lower()
+
+        # Name is the ONLY required import field.
+        if not name:
+            errors.append("Name is required")
+
+        # Email is optional. Validate it only when provided.
+        if email:
+            try:
+                validate_email(email)
+            except DjangoValidationError:
+                errors.append("Invalid email")
+
+        # Source is optional. Validate it only when provided.
+        if source_name and not any(
+            source_name.lower() == value.lower()
+            for value in refs["source"]
+        ):
+            errors.append("Unknown source")
+
+        # All remaining master-data fields are optional.
+        if product_name and not any(
+            product_name.lower() == value.lower()
+            for value in refs["product"]
+        ):
+            errors.append("Unknown course/product")
+
+        if learning_mode_name and not any(
+            learning_mode_name.lower() == value.lower()
+            for value in refs["learning_mode"]
+        ):
+            errors.append("Unknown learning mode")
+
+        if duration_name and not any(
+            duration_name.lower() == value.lower()
+            for value in refs["course_duration"]
+        ):
+            errors.append("Unknown course duration")
+
+        if status_value and status_value not in {
+            value.lower() for value in refs["status"]
+        }:
+            errors.append("Invalid status")
+
+        return errors
+
+    @classmethod
+    def _find_import_duplicates(cls, email, phone):
+        email = normalize_email(email)
+        phone = normalize_phone(phone)
+        if not email and not phone:
+            return []
+
+        duplicates = {}
+
+        leads = Lead.objects.filter(deleted_at__isnull=True).select_related("record__owner")
+        contacts = Contact.objects.filter(deleted_at__isnull=True).select_related("record__owner")
+
+        for lead in leads:
+            email_match = bool(email and normalize_email(lead.email) == email)
+            phone_match = bool(phone and normalize_phone(lead.phone) == phone)
+            if email_match or phone_match:
+                key = ("lead", lead.id)
+                duplicates[key] = {
+                    "type": "lead",
+                    "id": lead.id,
+                    "name": lead.name,
+                    "email": lead.email,
+                    "phone": lead.phone,
+                    "matched_fields": [
+                        field for field, matched in (("email", email_match), ("phone", phone_match)) if matched
+                    ],
+                }
+
+        for contact in contacts:
+            email_match = bool(email and normalize_email(contact.email) == email)
+            phone_match = bool(phone and normalize_phone(contact.phone) == phone)
+            if email_match or phone_match:
+                key = ("contact", contact.id)
+                duplicates[key] = {
+                    "type": "contact",
+                    "id": contact.id,
+                    "name": contact.name,
+                    "email": contact.email,
+                    "phone": contact.phone,
+                    "matched_fields": [
+                        field for field, matched in (("email", email_match), ("phone", phone_match)) if matched
+                    ],
+                }
+
+        return list(duplicates.values())
+
+    @classmethod
+    def _normalise_duplicate_decisions(cls, request):
+        raw = request.data.get("duplicate_decisions", {})
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        return {str(key): str(value).strip().lower() for key, value in raw.items()}
+
+    @classmethod
+    def _normalise_skip_rows(cls, request):
+        raw = request.data.get("skip_rows", [])
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                raw = [part.strip() for part in raw.split(",") if part.strip()]
+        if not isinstance(raw, list):
+            raw = []
+        return {str(value) for value in raw}
+
+    @action(detail=False, methods=["post"], url_path="import-preview")
+    def import_preview(self, request):
+        require_permission(request, "import_leads")
+        upload = request.FILES.get("file")
+        if not upload:
+            return Response({"detail": "Upload a CSV or XLSX file."}, status=400)
+        try:
+            headers, data_rows = self._parse_import_upload(upload)
+        except (ValueError, UnicodeDecodeError) as exc:
+            return Response({"detail": str(exc)}, status=400)
+        except Exception:
+            return Response({"detail": "The file could not be read safely."}, status=400)
+
+        mapping = self._suggest_import_mapping(headers)
+        supplied_mapping = request.data.get("mapping")
+        if supplied_mapping:
+            if isinstance(supplied_mapping, str):
+                try:
+                    supplied_mapping = json.loads(supplied_mapping)
+                except (TypeError, ValueError):
+                    supplied_mapping = None
+            if isinstance(supplied_mapping, dict):
+                mapping = supplied_mapping
+
+        refs = self._import_reference_values()
+        preview = []
+        all_errors = []
+        duplicate_rows = []
+        for row_number, raw_row in enumerate(data_rows, start=2):
+            row = self._apply_import_mapping(raw_row, mapping)
+
+            # Source is optional during import. When it is empty, preview the
+            # active "Other" source that will be assigned during import.
+            if not str(row.get("source", "")).strip():
+                default_source = self._lookup_ci(Source, "Other")
+                if default_source:
+                    row["source"] = default_source.name
+
+            errors = self._validate_import_row(row, row_number, refs)
+            duplicates = self._find_import_duplicates(row.get("email", ""), row.get("phone", ""))
+            if duplicates:
+                duplicate_rows.append({"row": row_number, "duplicates": duplicates})
+            item = {
+                "row": row_number,
+                "data": row,
+                "errors": errors,
+                "duplicates": duplicates,
+            }
+            if errors:
+                all_errors.append({"row": row_number, "errors": errors})
+            if len(preview) < 25:
+                preview.append(item)
+
+        accepted_values = {
+            "source": sorted(refs["source"]),
+            "product": sorted(refs["product"]),
+            "learning_mode": sorted(refs["learning_mode"]),
+            "course_duration": sorted(refs["course_duration"]),
+            "status": sorted(refs["status"]),
+        }
+        return Response({
+            "file_name": upload.name,
+            "headers": headers,
+            "mapping": mapping,
+            "accepted_values": accepted_values,
+            "preview": preview,
+            "errors": all_errors,
+            "duplicates": duplicate_rows,
+            "total_rows": len(data_rows),
+            "preview_rows": len(preview),
+        })
 
     @action(detail=False, methods=["post"], url_path="import")
     def import_leads(self, request):
@@ -226,118 +600,313 @@ class LeadViewSet(viewsets.ModelViewSet):
         upload = request.FILES.get("file")
         if not upload:
             return Response({"detail": "Upload a CSV or XLSX file."}, status=400)
+
         try:
-            if upload.name.lower().endswith(".xlsx"):
-                from openpyxl import load_workbook
-                workbook = load_workbook(upload, read_only=True, data_only=True)
-                sheet = workbook.active
-                rows = list(sheet.iter_rows(values_only=True))
-                if not rows:
-                    return Response({"detail": "The file is empty."}, status=400)
-                headers = [str(value or "").strip() for value in rows[0]]
-                data_rows = [dict(zip(headers, row)) for row in rows[1:]]
-            elif upload.name.lower().endswith(".csv"):
-                text = upload.read().decode("utf-8-sig")
-                reader = csv.DictReader(io.StringIO(text))
-                headers = reader.fieldnames or []
-                data_rows = list(reader)
-            else:
-                return Response({"detail": "Only CSV and XLSX files are supported."}, status=400)
+            headers, data_rows = self._parse_import_upload(upload)
+        except (ValueError, UnicodeDecodeError) as exc:
+            return Response({"detail": str(exc)}, status=400)
         except Exception:
             return Response({"detail": "The file could not be read safely."}, status=400)
-        normalized = {h.strip().lower(): h for h in headers}
-        required = {"name", "company", "email"}
-        missing = sorted(required - set(normalized))
-        if missing:
-            return Response({"headers": headers, "missing": missing, "rows": []}, status=400)
-        preview_rows = []
-        errors = []
-        existing = set(Lead.objects.filter(deleted_at__isnull=True).values_list("email", flat=True))
-        duplicate_action = request.data.get("duplicate_action", "skip")
-        for index, raw in enumerate(data_rows, start=2):
-            row = {key.lower().strip(): (value if value is not None else "") for key, value in raw.items()}
+
+        mapping = self._suggest_import_mapping(headers)
+        supplied_mapping = request.data.get("mapping")
+        if supplied_mapping:
+            if isinstance(supplied_mapping, str):
+                try:
+                    supplied_mapping = json.loads(supplied_mapping)
+                except (TypeError, ValueError):
+                    supplied_mapping = None
+            if isinstance(supplied_mapping, dict):
+                mapping = supplied_mapping
+
+        mode = str(request.data.get("mode", "preview")).strip().lower()
+        if mode != "import":
+            request._full_data = request.data.copy()
+            return self.import_preview(request)
+
+        refs = self._import_reference_values()
+        duplicate_decisions = self._normalise_duplicate_decisions(request)
+        skip_rows = self._normalise_skip_rows(request)
+        prepared = []
+        blocking_errors = []
+        skipped_count = 0
+
+        for row_number, raw_row in enumerate(data_rows, start=2):
+            row = self._apply_import_mapping(raw_row, mapping)
+            errors = self._validate_import_row(row, row_number, refs)
             email = str(row.get("email", "")).strip().lower()
-            row_errors = []
-            if not row.get("name"): row_errors.append("Name is required")
-            if not row.get("company"): row_errors.append("Company is required")
-            if "@" not in email: row_errors.append("Invalid email")
-            source_name = str(row.get("source", "")).strip()
-            product_name = str(row.get("product", row.get("course interested", ""))).strip()
-            learning_mode_name = str(row.get("learning_mode", row.get("preferred learning mode", ""))).strip()
-            course_duration_name = str(row.get("course_duration", row.get("preferred course duration", ""))).strip()
-            if source_name and not Source.objects.filter(name__iexact=source_name, active=True).exists(): row_errors.append("Invalid source")
-            if product_name and not Product.objects.filter(name__iexact=product_name, active=True).exists(): row_errors.append("Invalid product")
-            if learning_mode_name and not LearningMode.objects.filter(name__iexact=learning_mode_name, active=True).exists(): row_errors.append("Invalid learning mode")
-            if course_duration_name and not CourseDuration.objects.filter(name__iexact=course_duration_name, active=True).exists(): row_errors.append("Invalid course duration")
-            if email in existing and duplicate_action == "skip": row_errors.append("Duplicate email")
-            if row_errors: errors.append({"row": index, "errors": row_errors})
-            if len(preview_rows) < 25:
-                preview_rows.append({"row": index, "data": row, "errors": row_errors})
-        if request.data.get("mode", "preview") != "import":
-            return Response({"headers": headers, "preview": preview_rows, "errors": errors, "total_rows": len(data_rows)})
-        imported = 0
-        skipped = 0
+            duplicates = self._find_import_duplicates(email, row.get("phone", ""))
+            decision = duplicate_decisions.get(str(row_number), "")
+
+            if duplicates and decision not in {"skip", "update"}:
+                errors = errors + ["Duplicate found; choose skip or update. Email and mobile numbers must be unique."]
+            if decision == "import_anyway" and duplicates:
+                errors = errors + ["Import anyway is not allowed when an email or mobile number already exists."]
+            if decision == "skip" or str(row_number) in skip_rows:
+                skipped_count += 1
+                prepared.append({"row": row_number, "data": row, "duplicates": duplicates, "decision": "skip", "errors": errors})
+                continue
+            if decision == "update" and not duplicates:
+                errors.append("No existing lead or contact was found to update")
+            if errors:
+                blocking_errors.append({"row": row_number, "errors": errors})
+            prepared.append({"row": row_number, "data": row, "duplicates": duplicates, "decision": decision or "create", "errors": errors})
+
+        if blocking_errors:
+            return Response({
+                "detail": "Nothing was imported. Fix the reported rows or explicitly skip them, then retry.",
+                "errors": blocking_errors,
+                "skipped": skipped_count,
+                "total_rows": len(data_rows),
+            }, status=400)
+
         batch_id = secrets.token_hex(8)
-        for index, raw in enumerate(data_rows, start=2):
-            row = {key.lower().strip(): (value if value is not None else "") for key, value in raw.items()}
-            email = str(row.get("email", "")).strip().lower()
-            row_errors = []
-            if not row.get("name"): row_errors.append("Name is required")
-            if not row.get("company"): row_errors.append("Company is required")
-            if "@" not in email: row_errors.append("Invalid email")
-            source_name = str(row.get("source", "")).strip()
-            product_name = str(row.get("product", row.get("course interested", ""))).strip()
-            learning_mode_name = str(row.get("learning_mode", row.get("preferred learning mode", ""))).strip()
-            course_duration_name = str(row.get("course_duration", row.get("preferred course duration", ""))).strip()
-            if source_name and not Source.objects.filter(name__iexact=source_name, active=True).exists(): row_errors.append("Invalid source")
-            if product_name and not Product.objects.filter(name__iexact=product_name, active=True).exists(): row_errors.append("Invalid product")
-            if learning_mode_name and not LearningMode.objects.filter(name__iexact=learning_mode_name, active=True).exists(): row_errors.append("Invalid learning mode")
-            if course_duration_name and not CourseDuration.objects.filter(name__iexact=course_duration_name, active=True).exists(): row_errors.append("Invalid course duration")
-            is_duplicate = email in existing
-            if is_duplicate and duplicate_action == "skip": row_errors.append("Duplicate email")
-            if row_errors and not (duplicate_action == "import_anyway" and row_errors == ["Duplicate email"]):
-                skipped += 1
-                continue
-            source = Source.objects.filter(name__iexact=source_name, active=True).first() or Source.objects.filter(name="Other", active=True).first()
-            if not source:
-                skipped += 1
-                continue
-            if duplicate_action == "update" and is_duplicate:
-                lead = Lead.objects.filter(email=email, deleted_at__isnull=True).first()
-                if lead:
-                    lead.name = str(row.get("name", lead.name)).strip()
-                    lead.company = str(row.get("company", lead.company)).strip()
-                    lead.phone = str(row.get("phone", lead.phone)).strip()
-                    product_name = str(row.get("product", row.get("course interested", ""))).strip()
-                    learning_mode_name = str(row.get("learning_mode", row.get("preferred learning mode", ""))).strip()
-                    course_duration_name = str(row.get("course_duration", row.get("preferred course duration", ""))).strip()
-                    lead.product = Product.objects.filter(name__iexact=product_name, active=True).first() if product_name else None
-                    lead.learning_mode = LearningMode.objects.filter(name__iexact=learning_mode_name, active=True).first() if learning_mode_name else None
-                    lead.course_duration = CourseDuration.objects.filter(name__iexact=course_duration_name, active=True).first() if course_duration_name else None
-                    lead.town_city = str(row.get("town_city", row.get("town/city", ""))).strip()
-                    lead.notes = str(row.get("notes", row.get("lead feedback", lead.notes)))
-                    lead.save(update_fields=["name", "company", "phone", "product", "learning_mode", "course_duration", "town_city", "notes"])
-                    history(lead.record, request.user, "lead_imported", {"batch_id": batch_id, "mode": "update", "row": index})
-                    imported += 1
-                    continue
-            lead = Lead.objects.create(
-                record=Record.objects.create(owner=request.user),
-                name=str(row.get("name", "")).strip(),
-                company=str(row.get("company", "")).strip(),
-                email=email,
-                phone=str(row.get("phone", "")).strip(),
-                source=source,
-                product=Product.objects.filter(name__iexact=str(row.get("product", row.get("course interested", ""))).strip(), active=True).first() or None,
-                learning_mode=LearningMode.objects.filter(name__iexact=str(row.get("learning_mode", row.get("preferred learning mode", ""))).strip(), active=True).first() or None,
-                course_duration=CourseDuration.objects.filter(name__iexact=str(row.get("course_duration", row.get("preferred course duration", ""))).strip(), active=True).first() or None,
-                town_city=str(row.get("town_city", row.get("town/city", ""))).strip(),
-                status=Lead.Status.QUALIFIED if str(row.get("status", "")).strip().lower() == "qualified" else Lead.Status.NOT_QUALIFIED,
-                notes=str(row.get("notes", row.get("lead feedback", ""))),
-            )
-            history(lead.record, request.user, "lead_imported", {"batch_id": batch_id, "row": index})
-            imported += 1
-            existing.add(email)
-        return Response({"batch_id": batch_id, "imported": imported, "skipped": skipped, "errors": errors, "total_rows": len(data_rows)})
+        created_count = 0
+        updated_count = 0
+        outcome_rows = []
+
+        try:
+            with transaction.atomic():
+                batch = ImportBatch.objects.create(
+                    batch_id=batch_id,
+                    file_name=upload.name,
+                    imported_by=request.user,
+                    total_rows=len(data_rows),
+                    skipped_count=skipped_count,
+                )
+
+                for item in prepared:
+                    row_number = item["row"]
+                    row = item["data"]
+                    if item["decision"] == "skip":
+                        outcome_rows.append({"row": row_number, "result": "skipped", "reason": item["errors"] or ["Skipped by user"]})
+                        continue
+
+                    email = str(row.get("email", "")).strip().lower()
+
+                    # Source is optional in the uploaded file. If it is empty,
+                    # automatically assign the active "Other" source so every
+                    # imported Lead remains compatible with Contact conversion.
+                    source = self._lookup_ci(Source, row.get("source"))
+                    if not source:
+                        source = self._lookup_ci(Source, "Other")
+                    if not source:
+                        raise ValidationError(
+                            'Default Lead Source "Other" is not available or inactive.'
+                        )
+
+                    product = self._lookup_ci(Product, row.get("product"))
+                    learning_mode = self._lookup_ci(LearningMode, row.get("learning_mode"))
+                    course_duration = self._lookup_ci(CourseDuration, row.get("course_duration"))
+                    status_value = str(row.get("status", "")).strip().lower() or Lead.Status.NOT_QUALIFIED
+                    duplicate = item["duplicates"][0] if item["duplicates"] else None
+
+                    if item["decision"] == "update" and duplicate:
+                        if duplicate["type"] == "lead":
+                            lead = Lead.objects.select_related("record").get(pk=duplicate["id"])
+                            before = {
+                                "name": lead.name,
+                                "company": lead.company,
+                                "email": lead.email,
+                                "phone": lead.phone,
+                                "source_id": lead.source_id,
+                                "product_id": lead.product_id,
+                                "learning_mode_id": lead.learning_mode_id,
+                                "course_duration_id": lead.course_duration_id,
+                                "town_city": lead.town_city,
+                                "status": lead.status,
+                                "notes": lead.notes,
+                            }
+                            lead.name = row.get("name", lead.name)
+                            lead.company = row.get("company", lead.company)
+                            lead.phone = row.get("phone", lead.phone)
+                            lead.source = source
+                            lead.product = product
+                            lead.learning_mode = learning_mode
+                            lead.course_duration = course_duration
+                            lead.town_city = row.get("town_city", lead.town_city)
+                            lead.status = status_value
+                            lead.notes = row.get("notes", lead.notes)
+                            validate_unique_contact_details(
+                                email=email,
+                                phone=row.get("phone", lead.phone),
+                                exclude_lead_id=lead.id,
+                                check_leads=True,
+                                check_contacts=True,
+                            )
+                            lead.email = email
+                            lead.save(update_fields=["name", "company", "email", "phone", "source", "product", "learning_mode", "course_duration", "town_city", "status", "notes"])
+                            history(lead.record, request.user, "lead_imported", {"batch_id": batch_id, "row": row_number, "operation": "update", "before": before})
+                        else:
+                            contact = Contact.objects.select_related("record").get(pk=duplicate["id"])
+                            before = {
+                                "name": contact.name,
+                                "company": contact.company,
+                                "email": contact.email,
+                                "phone": contact.phone,
+                                "source_id": contact.source_id,
+                                "notes": contact.notes,
+                            }
+                            contact.name = row.get("name", contact.name)
+                            contact.company = row.get("company", contact.company)
+                            contact.phone = row.get("phone", contact.phone)
+                            contact.source = source
+                            contact.notes = row.get("notes", contact.notes)
+                            validate_unique_contact_details(
+                                email=email,
+                                phone=row.get("phone", contact.phone),
+                                exclude_contact_id=contact.id,
+                                check_leads=True,
+                                check_contacts=True,
+                            )
+                            contact.email = email or None
+                            contact.save(update_fields=["name", "company", "email", "phone", "source", "notes"])
+                            history(contact.record, request.user, "contact_imported", {"batch_id": batch_id, "row": row_number, "operation": "update", "before": before})
+                        updated_count += 1
+                        outcome_rows.append({"row": row_number, "result": "updated", "record_type": duplicate["type"], "record_id": duplicate["id"]})
+                        continue
+
+                    validate_unique_contact_details(
+                        email=email,
+                        phone=row.get("phone", ""),
+                        check_leads=True,
+                        check_contacts=True,
+                    )
+                    lead = Lead.objects.create(
+                        record=Record.objects.create(owner=request.user),
+                        name=row.get("name", ""),
+                        company=row.get("company", ""),
+                        email=email,
+                        phone=row.get("phone", ""),
+                        source=source,
+                        product=product,
+                        learning_mode=learning_mode,
+                        course_duration=course_duration,
+                        town_city=row.get("town_city", ""),
+                        status=status_value,
+                        notes=row.get("notes", ""),
+                    )
+                    history(lead.record, request.user, "lead_imported", {"batch_id": batch_id, "row": row_number, "operation": "create"})
+                    created_count += 1
+                    outcome_rows.append({"row": row_number, "result": "created", "record_type": "lead", "record_id": lead.id})
+
+                batch.created_count = created_count
+                batch.updated_count = updated_count
+                batch.skipped_count = skipped_count
+                batch.failed_count = 0
+                batch.save(update_fields=["created_count", "updated_count", "skipped_count", "failed_count"])
+                audit(request.user, "lead.import.batch", batch, after={
+                    "batch_id": batch_id,
+                    "file_name": upload.name,
+                    "created": created_count,
+                    "updated": updated_count,
+                    "skipped": skipped_count,
+                    "failed": 0,
+                    "rows": outcome_rows,
+                })
+        except Exception as exc:
+            return Response({"detail": f"The import was rolled back because the batch could not be completed: {exc}"}, status=400)
+
+        return Response({
+            "batch_id": batch_id,
+            "file_name": upload.name,
+            "created": created_count,
+            "updated": updated_count,
+            "skipped": skipped_count,
+            "failed": 0,
+            "total_rows": len(data_rows),
+            "report_url": f"/api/leads/import-report/{batch_id}/",
+        }, status=201)
+
+    @action(detail=False, methods=["get"], url_path=r"import-report/(?P<batch_id>[0-9a-f]+)")
+    def import_report(self, request, batch_id=None):
+        require_permission(request, "import_leads")
+        batch = ImportBatch.objects.filter(batch_id=batch_id).first()
+        if not batch:
+            return Response({"detail": "Import batch not found."}, status=404)
+        if not request.user.has_crm_permission("view_workspace_records") and batch.imported_by_id != request.user.id:
+            return Response(status=403)
+
+        audit_row = batch.__class__
+        from .models import AuditEvent
+        event = AuditEvent.objects.filter(action="lead.import.batch", target_type="ImportBatch", target_id=str(batch.pk)).order_by("-created_at").first()
+        rows = event.after.get("rows", []) if event else []
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Batch ID", "File", "Row", "Result", "Record Type", "Record ID", "Reason"])
+        for row in rows:
+            writer.writerow([
+                batch.batch_id,
+                batch.file_name,
+                row.get("row", ""),
+                row.get("result", ""),
+                row.get("record_type", ""),
+                row.get("record_id", ""),
+                "; ".join(row.get("reason", [])) if isinstance(row.get("reason"), list) else row.get("reason", ""),
+            ])
+        if not rows:
+            writer.writerow([batch.batch_id, batch.file_name, "", "", "", "", "No row-level outcomes recorded"])
+        writer.writerow([])
+        writer.writerow(["Summary", "Created", batch.created_count, "Updated", batch.updated_count, "Skipped", batch.skipped_count, "Failed", batch.failed_count])
+
+        response = HttpResponse(output.getvalue(), content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="litecrm-import-{batch.batch_id}-report.csv"'
+        return response
+
+    @action(detail=False, methods=["post"], url_path=r"import-reverse/(?P<batch_id>[0-9a-f]+)")
+    def import_reverse(self, request, batch_id=None):
+        require_permission(request, "import_leads")
+        batch = ImportBatch.objects.filter(batch_id=batch_id).first()
+        if not batch:
+            return Response({"detail": "Import batch not found."}, status=404)
+        if batch.reversed_at:
+            return Response({"detail": "This import batch has already been reversed."}, status=400)
+        if not request.user.has_crm_permission("view_workspace_records") and batch.imported_by_id != request.user.id:
+            return Response(status=403)
+
+        events = list(batch.imported_by.audit_events.none()) if False else []
+        from .models import HistoryEvent
+        history_rows = list(HistoryEvent.objects.filter(detail__batch_id=batch_id).select_related("record", "record__lead", "record__contact").order_by("-created_at"))
+        if not history_rows:
+            return Response({"detail": "No reversible records were found for this batch."}, status=400)
+
+        with transaction.atomic():
+            reversed_count = 0
+            for event in history_rows:
+                detail = event.detail or {}
+                operation = detail.get("operation")
+                if operation == "create" and hasattr(event.record, "lead"):
+                    lead = event.record.lead
+                    if lead.deleted_at is None:
+                        lead.deleted_at = timezone.now()
+                        lead.save(update_fields=["deleted_at"])
+                        reversed_count += 1
+                elif operation == "create" and hasattr(event.record, "contact"):
+                    contact = event.record.contact
+                    if contact.deleted_at is None:
+                        contact.deleted_at = timezone.now()
+                        contact.save(update_fields=["deleted_at"])
+                        reversed_count += 1
+                elif operation == "update":
+                    before = detail.get("before", {})
+                    if hasattr(event.record, "lead"):
+                        lead = event.record.lead
+                        for field, value in before.items():
+                            setattr(lead, field, value)
+                        lead.save(update_fields=list(before.keys()))
+                        reversed_count += 1
+                    elif hasattr(event.record, "contact"):
+                        contact = event.record.contact
+                        for field, value in before.items():
+                            setattr(contact, field, value)
+                        contact.save(update_fields=list(before.keys()))
+                        reversed_count += 1
+            batch.reversed_at = timezone.now()
+            batch.save(update_fields=["reversed_at"])
+            audit(request.user, "lead.import.batch_reversed", batch, after={"batch_id": batch_id, "reversed_records": reversed_count})
+
+        return Response({"batch_id": batch_id, "reversed": reversed_count, "reversed_at": batch.reversed_at})
 
 
 class RoleViewSet(viewsets.ViewSet):
@@ -666,20 +1235,74 @@ class UserViewSet(viewsets.ViewSet):
 
 class ContactViewSet(viewsets.ModelViewSet):
     serializer_class = ContactSerializer
-    def retrieve(self, request, *args, **kwargs): require_permission(request, "view_contacts"); return super().retrieve(request, *args, **kwargs)
-    def update(self, request, *args, **kwargs): require_permission(request, "edit_contact"); return super().update(request, *args, **kwargs)
-    def partial_update(self, request, *args, **kwargs): require_permission(request, "edit_contact"); return super().partial_update(request, *args, **kwargs)
-    def destroy(self, request, *args, **kwargs): require_permission(request, "delete_contact"); return super().destroy(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        require_permission(request, "view_contacts")
+        return super().retrieve(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        require_permission(request, "edit_contact")
+        return self._update_contact(request, partial=False, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        require_permission(request, "edit_contact")
+        return self._update_contact(request, partial=True, *args, **kwargs)
+
+    def _update_contact(self, request, *args, partial=False, **kwargs):
+        contact = self.get_object()
+        payload = request.data.copy()
+        owner_value = payload.pop("owner", None)
+        new_owner = None
+        if owner_value is not None:
+            try:
+                owner_id = int(owner_value)
+            except (TypeError, ValueError):
+                return Response({"owner": "Invalid owner."}, status=400)
+            if owner_id != contact.record.owner_id and not request.user.has_crm_permission("reassign_contact"):
+                return Response({"detail": "You do not have permission to reassign this contact."}, status=403)
+            new_owner = User.objects.filter(pk=owner_id, is_active=True).first()
+            if not new_owner:
+                return Response({"owner": "Owner must be an active user."}, status=400)
+        serializer = self.get_serializer(contact, data=payload, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        updated = serializer.save()
+        if new_owner:
+            updated.record.owner = new_owner
+            updated.record.save(update_fields=["owner"])
+        history(updated.record, request.user, "contact_updated")
+        audit(request.user, "contact.updated", updated, after=self.get_serializer(updated).data)
+        return Response(self.get_serializer(updated).data)
+
+    def destroy(self, request, *args, **kwargs):
+        require_permission(request, "delete_contact")
+        return super().destroy(request, *args, **kwargs)
+
     def get_queryset(self):
-        return Contact.objects.filter(record__in=visible_records(self.request.user), deleted_at__isnull=True).select_related("record__owner", "source")
+        return Contact.objects.filter(record__in=visible_records(self.request.user), deleted_at__isnull=True).select_related("record__owner", "source", "product", "learning_mode", "course_duration")
+
     def list(self, request, *args, **kwargs):
-        if not request.user.has_crm_permission("view_contacts"): return Response(status=403)
+        if not request.user.has_crm_permission("view_contacts"):
+            return Response(status=403)
         return super().list(request, *args, **kwargs)
+
     def create(self, request, *args, **kwargs):
-        if not request.user.has_crm_permission("create_contact"): return Response(status=403)
-        serializer = self.get_serializer(data=request.data); serializer.is_valid(raise_exception=True)
-        contact = serializer.save(record=Record.objects.create(owner=request.user))
-        history(contact.record, request.user, "contact_created_directly")
+        if not request.user.has_crm_permission("create_contact"):
+            return Response(status=403)
+        payload = request.data.copy()
+        owner_value = payload.pop("owner", None) or request.user.id
+        try:
+            owner_id = int(owner_value)
+        except (TypeError, ValueError):
+            return Response({"owner": "Invalid owner."}, status=400)
+        if owner_id != request.user.id and not request.user.has_crm_permission("reassign_contact"):
+            return Response({"detail": "You do not have permission to assign this contact to another user."}, status=403)
+        owner = User.objects.filter(pk=owner_id, is_active=True).first()
+        if not owner:
+            return Response({"owner": "Owner must be an active user."}, status=400)
+        serializer = self.get_serializer(data=payload)
+        serializer.is_valid(raise_exception=True)
+        contact = serializer.save(record=Record.objects.create(owner=owner))
+        history(contact.record, request.user, "contact_created_directly", {"owner_id": owner.id})
         audit(request.user, "contact.created", contact, after=serializer.data)
         return Response(self.get_serializer(contact).data, status=201)
     @action(detail=True, methods=["get", "post"])
@@ -780,10 +1403,18 @@ class ProductViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to manage the product catalogue.")
         serializer.save()
 
-    def perform_destroy(self, instance):
+    def destroy(self, request, *args, **kwargs):
         if not self._can_manage_catalogue():
             raise PermissionDenied("You do not have permission to manage the product catalogue.")
-        instance.delete()
+        instance = self.get_object()
+        try:
+            instance.delete()
+        except ProtectedError:
+            return Response(
+                {"detail": "This course is used by existing Leads or Contacts and cannot be deleted. Deactivate it instead to preserve existing records."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class LearningModeViewSet(viewsets.ModelViewSet):
@@ -806,10 +1437,18 @@ class LearningModeViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to manage learning modes.")
         serializer.save()
 
-    def perform_destroy(self, instance):
-        if not self.request.user.has_crm_permission("manage_catalogue"):
+    def destroy(self, request, *args, **kwargs):
+        if not request.user.has_crm_permission("manage_catalogue"):
             raise PermissionDenied("You do not have permission to manage learning modes.")
-        instance.delete()
+        instance = self.get_object()
+        try:
+            instance.delete()
+        except ProtectedError:
+            return Response(
+                {"detail": "This Learning Mode is used by existing Leads or Contacts and cannot be deleted. Deactivate it instead to preserve existing records."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CourseDurationViewSet(viewsets.ModelViewSet):
@@ -832,10 +1471,18 @@ class CourseDurationViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to manage course durations.")
         serializer.save()
 
-    def perform_destroy(self, instance):
-        if not self.request.user.has_crm_permission("manage_catalogue"):
+    def destroy(self, request, *args, **kwargs):
+        if not request.user.has_crm_permission("manage_catalogue"):
             raise PermissionDenied("You do not have permission to manage course durations.")
-        instance.delete()
+        instance = self.get_object()
+        try:
+            instance.delete()
+        except ProtectedError:
+            return Response(
+                {"detail": "This Course Duration is used by existing Leads or Contacts and cannot be deleted. Deactivate it instead to preserve existing records."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class SourceViewSet(viewsets.ModelViewSet):

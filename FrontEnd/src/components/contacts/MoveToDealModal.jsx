@@ -6,7 +6,7 @@ import Avatar from '../ui/Avatar'
 import { Field, Input, Select } from '../ui/FormField'
 import { useForm, validators } from '../../hooks/useForm'
 import { useData } from '../../context/DataContext'
-import { ENTRY_STAGE, PRODUCTS } from '../../data/mockData'
+import { ENTRY_STAGE } from '../../data/mockData'
 import { formatCurrency } from '../../utils/format'
 
 function defaultCloseDate() {
@@ -34,16 +34,90 @@ function validate(values) {
  * Saving creates the deal at Proposal.
  */
 export default function MoveToDealModal({ open, onClose, onConfirm, contact }) {
-  const { users } = useData()
+  const { products, users } = useData()
+
+  // Only active products from the Admin-managed catalogue may be selected
+  // when creating a Deal. Do not use the old hard-coded mock product list.
+  const activeProducts = useMemo(
+    () =>
+      (products ?? []).filter(
+        (item) => item && item.active !== false
+      ),
+    [products]
+  )
+
+  // Deal owners must be active Salespersons or Sales Managers. Admin users
+  // and inactive users are intentionally excluded from this assignment list.
+  const ownerUsers = useMemo(
+    () =>
+      (users ?? []).filter((item) => {
+        if (!item) return false
+
+        const isActive =
+          item.is_active === true ||
+          (item.is_active == null && item.active === true)
+
+        if (!isActive) return false
+
+        const roleKey = String(item.role ?? '')
+          .trim()
+          .toLowerCase()
+        const roleName = String(item.role_name ?? '')
+          .trim()
+          .toLowerCase()
+
+        return (
+          roleKey === 'salesperson' ||
+          roleName === 'salesperson' ||
+          roleKey === 'sales_manager' ||
+          roleName === 'sales manager'
+        )
+      }),
+    [users]
+  )
+
+  const productOptions = useMemo(
+    () =>
+      activeProducts.map((item) => ({
+        value: item.name,
+        label: item.name,
+      })),
+    [activeProducts]
+  )
+
+  const ownerOptions = useMemo(
+    () =>
+      ownerUsers.map((item) => {
+        const name =
+          item.display_name ??
+          item.displayName ??
+          item.name ??
+          item.username ??
+          item.email ??
+          'User'
+
+        return {
+          value: name,
+          label: name,
+        }
+      }),
+    [ownerUsers]
+  )
+
   const initialValues = useMemo(
     () => ({
-      product: PRODUCTS[0],
+      product: activeProducts[0]?.name ?? '',
       value: '',
       closeDate: defaultCloseDate(),
-      owner: contact?.owner ?? users[0]?.display_name ?? '',
+      owner:
+        ownerOptions.some(
+          (item) => item.value === contact?.owner
+        )
+          ? contact?.owner
+          : ownerOptions[0]?.value ?? '',
       notes: '',
     }),
-    [contact]
+    [activeProducts, contact, ownerOptions]
   )
 
   const form = useForm(initialValues, validate)
@@ -101,11 +175,19 @@ export default function MoveToDealModal({ open, onClose, onConfirm, contact }) {
           error={form.field('product').error}
           hint="What they are interested in."
         >
-          <Select {...form.field('product')} options={PRODUCTS} />
+          <Select
+            {...form.field('product')}
+            options={productOptions}
+            placeholder={
+              productOptions.length
+                ? undefined
+                : 'No active products available'
+            }
+          />
         </Field>
 
         <Field
-          label="Deal Value (USD)"
+          label="Deal Value (INR ₹)"
           htmlFor="value"
           required
           error={form.field('value').error}
@@ -124,7 +206,15 @@ export default function MoveToDealModal({ open, onClose, onConfirm, contact }) {
             <Input {...form.field('closeDate')} type="date" />
           </Field>
           <Field label="Owner" htmlFor="owner">
-            <Select {...form.field('owner')} options={users.map((item) => item.display_name)} />
+            <Select
+              {...form.field('owner')}
+              options={ownerOptions}
+              placeholder={
+                ownerOptions.length
+                  ? undefined
+                  : 'No active Sales users available'
+              }
+            />
           </Field>
         </div>
 

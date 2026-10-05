@@ -71,3 +71,16 @@ export function CardBody({ className, children }) {
     </div>
   )
 }
+
+export function CardFooter({ className, children }) {
+  return (
+    <div
+      className={cn(
+        'flex min-w-0 flex-col-reverse gap-2.5 border-t border-slate-100 bg-slate-50/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-end sm:gap-3 sm:px-5',
+        className
+      )}
+    >
+      {children}
+    </div>
+  )
+}

@@ -8,10 +8,12 @@ import {
   Download,
   Eye,
   Pencil,
+  NotebookPen,
   Plus,
   Trash2,
   UserPlus,
   Upload,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   useNavigate,
@@ -39,6 +41,7 @@ import RowActions from "../components/ui/RowActions";
 import Pagination from "../components/ui/Pagination";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import LeadFormModal from "../components/leads/LeadFormModal";
+import LeadImportModal from "../components/leads/LeadImportModal";
 import LeadDrawer from "../components/leads/LeadDrawer";
 import LogActivityModal from "../components/contacts/LogActivityModal";
 
@@ -84,7 +87,7 @@ export default function Leads() {
 
   const toast = useToast();
   const navigate = useNavigate();
-  const fileRef = useRef(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   /*
    * --------------------------------------------------------------------------
@@ -177,6 +180,9 @@ export default function Leads() {
 
   const [selected, setSelected] =
     useState([]);
+
+  const [filtersOpen, setFiltersOpen] =
+    useState(false);
 
   const [formOpen, setFormOpen] =
     useState(false);
@@ -1079,99 +1085,31 @@ export default function Leads() {
 
   /*
    * --------------------------------------------------------------------------
-   * IMPORT
+   * BULK LEAD IMPORT
    * --------------------------------------------------------------------------
+   *
+   * The import workflow is intentionally isolated in LeadImportModal.
+   * Leads.jsx only controls the modal lifecycle and refreshes the existing
+   * live lead data after a completed import. Existing Lead CRUD/filtering
+   * behavior is untouched.
    */
 
-  async function importFile(
-    event,
-  ) {
-    const file =
-      event.target.files?.[0];
+  function handleImportComplete(result) {
+    setImportOpen(false);
 
-    event.target.value = "";
+    const imported = Number(result?.imported ?? 0);
+    const skipped = Number(result?.skipped ?? 0);
+    const failed = Array.isArray(result?.errors)
+      ? result.errors.length
+      : Number(result?.failed ?? 0);
 
-    if (!file) {
-      return;
-    }
+    toast.success(
+      "Import completed",
+      `${imported} created/updated · ${skipped} skipped · ${failed} failed`,
+    );
 
-    try {
-      const form =
-        new FormData();
-
-      form.append(
-        "file",
-        file,
-      );
-
-      form.append(
-        "mode",
-        "preview",
-      );
-
-      const preview =
-        await api(
-          "/leads/import/",
-          {
-            method: "POST",
-            body: form,
-            headers: {},
-          },
-        );
-
-      const message =
-        `${preview.total_rows} rows detected. ` +
-        `${preview.errors.length} rows have validation issues. ` +
-        "Import valid rows?";
-
-      if (
-        !window.confirm(
-          message,
-        )
-      ) {
-        return;
-      }
-
-      const importForm =
-        new FormData();
-
-      importForm.append(
-        "file",
-        file,
-      );
-
-      importForm.append(
-        "mode",
-        "import",
-      );
-
-      importForm.append(
-        "duplicate_action",
-        "skip",
-      );
-
-      const result =
-        await api(
-          "/leads/import/",
-          {
-            method: "POST",
-            body: importForm,
-            headers: {},
-          },
-        );
-
-      toast.success(
-        "Import completed",
-        `${result.imported} imported, ${result.skipped} skipped`,
-      );
-
-      window.location.reload();
-    } catch (err) {
-      toast.error(
-        "Import failed",
-        err.message,
-      );
-    }
+    // Refresh through the existing application/data flow.
+    window.location.reload();
   }
 
   /*
@@ -1255,37 +1193,23 @@ export default function Leads() {
 
   return (
     <div className="min-w-0 space-y-5">
-      <div className="min-w-0 overflow-x-auto overscroll-x-contain">
-        <div className="min-w-0">
-          <ProcessSteps
-            current="leads"
-            counts={{
-              leads:
-                stats.totalLeads,
-              contacts:
-                stats.totalContacts,
-              deals:
-                stats.totalDeals,
-            }}
-          />
-        </div>
-      </div>
+      <ProcessSteps
+        current="leads"
+        counts={{
+          leads:
+            stats.totalLeads,
+          contacts:
+            stats.totalContacts,
+          deals:
+            stats.totalDeals,
+        }}
+      />
 
       <PageHeader
         title="Leads"
         subtitle="Capture, qualify, reassign and convert leads using live backend data."
         actions={
           <div className="flex flex-wrap gap-2">
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".csv,.xlsx"
-              className="hidden"
-              onChange={
-                importFile
-              }
-            />
-
             {hasPermission(
               "import_leads",
             ) ? (
@@ -1293,7 +1217,7 @@ export default function Leads() {
                 variant="secondary"
                 icon={Upload}
                 onClick={() =>
-                  fileRef.current?.click()
+                  setImportOpen(true)
                 }
               >
                 Import
@@ -1318,7 +1242,28 @@ export default function Leads() {
       />
 
       <Card>
-        <div className="flex flex-col gap-3 border-b border-slate-200 p-4">
+        <div className="flex items-center gap-2 border-b border-slate-200 p-3 sm:hidden">
+          <Button
+            variant="secondary"
+            icon={SlidersHorizontal}
+            onClick={() => setFiltersOpen((open) => !open)}
+            className="flex-1"
+            aria-expanded={filtersOpen}
+          >
+            Filters{hasFilters ? ` (${[status, source, owner, course, learningMode, courseDuration, townCity].filter(Boolean).length})` : ''}
+          </Button>
+          {hasFilters ? (
+            <Button
+              variant="secondary"
+              onClick={resetFilters}
+              className="shrink-0"
+            >
+              Clear
+            </Button>
+          ) : null}
+        </div>
+
+        <div className={`${filtersOpen ? 'flex' : 'hidden'} sm:flex flex-col gap-3 border-b border-slate-200 p-4`}>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
             <SearchBar
               value={query}
@@ -1775,54 +1720,50 @@ export default function Leads() {
                           }
                         >
                           <RowActions
-                            items={[
+                            label={`Actions for ${lead.name}`}
+                            actions={[
                               {
-                                label:
-                                  "View",
+                                label: "View",
                                 icon: Eye,
-                                onClick:
-                                  () =>
-                                    openLead(
-                                      lead,
-                                    ),
+                                onClick: () =>
+                                  openLead(lead),
                               },
-
+                              {
+                                label: "Log activity",
+                                icon: NotebookPen,
+                                onClick: () =>
+                                  setLogging(lead),
+                              },
+                              {
+                                label: "Move to contact",
+                                icon: UserPlus,
+                                onClick: () =>
+                                  handleMoveToContact(lead),
+                              },
                               ...(hasPermission(
                                 "edit_lead",
                               )
                                 ? [
                                     {
-                                      label:
-                                        "Edit",
+                                      label: "Edit",
                                       icon: Pencil,
-                                      onClick:
-                                        () => {
-                                          setEditing(
-                                            lead,
-                                          );
-                                          setFormOpen(
-                                            true,
-                                          );
-                                        },
+                                      onClick: () => {
+                                        setEditing(lead);
+                                        setFormOpen(true);
+                                      },
                                     },
                                   ]
                                 : []),
-
                               ...(hasPermission(
                                 "delete_lead",
                               )
                                 ? [
                                     {
-                                      label:
-                                        "Delete",
+                                      label: "Delete",
                                       icon: Trash2,
-                                      danger:
-                                        true,
-                                      onClick:
-                                        () =>
-                                          setPendingDelete(
-                                            lead,
-                                          ),
+                                      tone: "danger",
+                                      onClick: () =>
+                                        setPendingDelete(lead),
                                     },
                                   ]
                                 : []),
@@ -1950,32 +1891,37 @@ export default function Leads() {
                         }
                       >
                         <RowActions
-                          items={[
+                          label={`Actions for ${lead.name}`}
+                          actions={[
                             {
                               label: "View",
                               icon: Eye,
                               onClick: () =>
-                                openLead(
-                                  lead,
-                                ),
+                                openLead(lead),
+                            },
+                            {
+                              label: "Log activity",
+                              icon: NotebookPen,
+                              onClick: () =>
+                                setLogging(lead),
+                            },
+                            {
+                              label: "Move to contact",
+                              icon: UserPlus,
+                              onClick: () =>
+                                handleMoveToContact(lead),
                             },
                             ...(hasPermission(
                               "edit_lead",
                             )
                               ? [
                                   {
-                                    label:
-                                      "Edit",
+                                    label: "Edit",
                                     icon: Pencil,
-                                    onClick:
-                                      () => {
-                                        setEditing(
-                                          lead,
-                                        );
-                                        setFormOpen(
-                                          true,
-                                        );
-                                      },
+                                    onClick: () => {
+                                      setEditing(lead);
+                                      setFormOpen(true);
+                                    },
                                   },
                                 ]
                               : []),
@@ -1984,16 +1930,11 @@ export default function Leads() {
                             )
                               ? [
                                   {
-                                    label:
-                                      "Delete",
+                                    label: "Delete",
                                     icon: Trash2,
-                                    danger:
-                                      true,
-                                    onClick:
-                                      () =>
-                                        setPendingDelete(
-                                          lead,
-                                        ),
+                                    tone: "danger",
+                                    onClick: () =>
+                                      setPendingDelete(lead),
                                   },
                                 ]
                               : []),
@@ -2145,6 +2086,12 @@ export default function Leads() {
           </div>
         ) : null}
       </Card>
+
+      <LeadImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onComplete={handleImportComplete}
+      />
 
       <LeadFormModal
         open={formOpen}

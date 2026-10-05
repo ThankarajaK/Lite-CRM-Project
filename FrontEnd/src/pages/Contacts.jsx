@@ -40,10 +40,7 @@ import LogActivityModal from '../components/contacts/LogActivityModal'
 import { useData } from '../context/DataContext'
 import { useToast } from '../context/ToastContext'
 import { useSimulatedLoading } from '../hooks/useSimulatedLoading'
-import {
-  formatCurrency,
-  formatDate,
-} from '../utils/format'
+import { formatDate } from '../utils/format'
 
 const PAGE_SIZE = 8
 
@@ -231,68 +228,95 @@ export default function Contacts() {
   // Contact form
   // ---------------------------------------------------------------------------
 
-  function handleSubmit(values) {
-    if (editing) {
-      updateContact(
-        editing.id,
-        values
-      )
+  
+  async function handleSubmit(values) {
+    const name = String(values.name ?? '').trim()
+    const company = String(values.company ?? '').trim()
+    const email = String(values.email ?? '').trim()
 
-      toast.success(
-        'Contact updated',
-        values.company
-      )
-
-      setViewing((current) =>
-        current?.id === editing.id
-          ? {
-              ...current,
-              ...values,
-            }
-          : current
-      )
-    } else {
-      addContact(values)
-
-      toast.success(
-        'Contact added',
-        values.company
-      )
-
-      setPage(1)
+    // Name is the only required field for Contacts.
+    if (!name) {
+      toast.error('Required field missing', 'Please enter the contact Name.')
+      return
     }
 
-    setEditing(null)
-    setFormOpen(false)
-  }
+    try {
+      if (editing) {
+        const payload = {
+          ...values,
+          name,
+        }
 
+        await updateContact(editing.id, payload)
+
+        toast.success('Contact updated', company)
+
+        setViewing((current) =>
+          current?.id === editing.id
+            ? { ...current, ...values, name, company, email }
+            : current,
+        )
+      } else {
+        await addContact({
+          ...values,
+          name,
+          company,
+          email,
+        })
+
+        toast.success('Contact added', company)
+        setPage(1)
+      }
+
+      setEditing(null)
+      setFormOpen(false)
+    } catch (error) {
+      console.error('Contact save failed:', error)
+
+      toast.error(
+        'Contact not saved',
+        error?.message ||
+          'The server rejected the request. Please check the required fields and try again.',
+      )
+    }
+  }
   // ---------------------------------------------------------------------------
   // Delete contact
   // ---------------------------------------------------------------------------
 
-  function handleDelete() {
+
+  async function handleDelete() {
     if (!pendingDelete) {
       return
     }
 
-    deleteContact(
-      pendingDelete.id
-    )
+    try {
+      await deleteContact(pendingDelete.id)
 
-    toast.success(
-      'Contact removed',
-      pendingDelete.company
-    )
+      toast.success(
+        'Contact removed',
+        pendingDelete.company,
+      )
 
-    setViewing((current) =>
-      current?.id ===
-      pendingDelete.id
-        ? null
-        : current
-    )
+      setViewing((current) =>
+        current?.id === pendingDelete.id
+          ? null
+          : current,
+      )
 
-    setPendingDelete(null)
+      setPendingDelete(null)
+    } catch (error) {
+      console.error('Contact deletion failed:', error)
+
+      toast.error(
+        'Contact not deleted',
+        error?.message ||
+          'The server could not delete this contact.',
+      )
+    }
   }
+  
+
 
   // ---------------------------------------------------------------------------
   // Log activity
@@ -329,24 +353,33 @@ export default function Contacts() {
       return
     }
 
-    const deal =
-      await moveContactToDeal(
+    try {
+      const deal = await moveContactToDeal(
         movingToDeal,
         values
       )
 
-    setMovingToDeal(null)
-    setViewing(null)
+      if (!deal) {
+        toast.error('Deal was not created', 'Please try again.')
+        return
+      }
 
-    if (deal) {
+      setMovingToDeal(null)
+      setViewing(null)
+
+      // Show the success toast before changing pages so it is visible to the user.
       toast.success(
         'Deal created at Proposal',
-        `${deal.name} · ${formatCurrency(
-          deal.value
-        )}`
+        `${formatCurrency(deal.value)} · ${deal.name}`
       )
 
-      navigate('/deals')
+      window.setTimeout(() => navigate('/deals'), 250)
+    } catch (error) {
+      console.error('Unable to move contact to deal:', error)
+      toast.error(
+        'Could not create deal',
+        error?.message || 'Please check the deal details and try again.'
+      )
     }
   }
 
@@ -524,294 +557,292 @@ export default function Contacts() {
         ) : (
           <>
             {/* ----------------------------------------------------------- */}
-            {/* Table wrapper                                                */}
+            {/* Desktop / tablet table (>=768px)                            */}
             {/* ----------------------------------------------------------- */}
 
-            <div className="min-w-0 overflow-x-auto scrollbar-slim">
-              <Table className="min-w-[880px]">
+            <div className="hidden min-w-0 overflow-x-auto scrollbar-slim min-[768px]:block">
+              <Table className="min-w-[1500px]">
                 <THead>
                   <TR>
-                    <TH>Contact</TH>
-
+                    <TH>Name</TH>
                     <TH>Company</TH>
-
-                    <TH>Stage</TH>
-
-                    <TH className="hidden 2xl:table-cell">
-                      Email
-                    </TH>
-
-                    <TH className="text-right">
-                      Deals
-                    </TH>
-
-                    <TH className="text-right">
-                      Value
-                    </TH>
-
-                    <TH className="hidden xl:table-cell">
-                      Last Contact
-                    </TH>
-
-                    <TH className="text-right">
-                      Actions
-                    </TH>
+                    <TH>Email</TH>
+                    <TH>Course Interested</TH>
+                    <TH>Learning Mode</TH>
+                    <TH>Course Duration</TH>
+                    <TH>Town / City</TH>
+                    <TH>Source</TH>
+                    <TH>Status</TH>
+                    <TH>Owner</TH>
+                    <TH>Captured</TH>
+                    <TH className="text-right">Actions</TH>
                   </TR>
                 </THead>
 
                 <TBody>
-                  {visible.map(
-                    (contact) => {
-                      const contactDeals =
-                        dealsByCompany[
-                          contact.company
-                        ] ?? []
+                  {visible.map((contact) => {
+                    const contactDeals = dealsByCompany[contact.company] ?? []
+                    const capturedDate = contact.movedAt ?? contact.becameContactAt ?? contact.createdAt
+                    const sourceLabel =
+                      contact.sourceName ??
+                      (typeof contact.source === 'string' ? contact.source : '') ??
+                      ''
 
-                      const totalValue =
-                        contactDeals.reduce(
-                          (
-                            sum,
-                            deal
-                          ) =>
-                            sum +
-                            (Number(
-                              deal.value
-                            ) || 0),
-                          0
-                        )
-
-                      return (
-                        <TR
-                          key={
-                            contact.id
-                          }
-                          onClick={() =>
-                            setViewing(
-                              contact
-                            )
-                          }
-                        >
-                          {/* ------------------------------------------------ */}
-                          {/* Contact                                           */}
-                          {/* ------------------------------------------------ */}
-
-                          <TD>
-                            <div className="flex min-w-0 items-center gap-2.5">
-                              <Avatar
-                                name={
-                                  contact.name
-                                }
-                                size="sm"
-                              />
-
-                              <div className="min-w-0">
-                                <p className="whitespace-nowrap font-medium text-slate-900">
-                                  {
-                                    contact.name
-                                  }
-                                </p>
-
-                                <p className="whitespace-nowrap text-xs text-slate-500">
-                                  {
-                                    contact.industry
-                                  }
-                                </p>
-                              </div>
+                    return (
+                      <TR
+                        key={contact.id}
+                        onClick={() => setViewing(contact)}
+                      >
+                        <TD>
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            <Avatar name={contact.name} size="sm" />
+                            <div className="min-w-0">
+                              <p className="whitespace-nowrap font-medium text-slate-900">
+                                {contact.name || '—'}
+                              </p>
+                              <p className="whitespace-nowrap text-xs text-slate-500">
+                                {contact.phone || '—'}
+                              </p>
                             </div>
-                          </TD>
-
-                          {/* ------------------------------------------------ */}
-                          {/* Company                                           */}
-                          {/* ------------------------------------------------ */}
-
-                          <TD>
-                            <div className="flex items-center gap-2 whitespace-nowrap">
-                              <span>
-                                {
-                                  contact.company
-                                }
-                              </span>
-
-                              <StatusBadge
-                                status={
-                                  contact.status
-                                }
-                                dot={false}
-                              />
-                            </div>
-                          </TD>
-
-                          {/* ------------------------------------------------ */}
-                          {/* Pipeline stage                                    */}
-                          {/* ------------------------------------------------ */}
-
-                          <TD>
-                            <StatusBadge
-                              status={
-                                contactDeals.length >
-                                0
-                                  ? 'In pipeline'
-                                  : 'No deal yet'
-                              }
-                            />
-                          </TD>
-
-                          {/* ------------------------------------------------ */}
-                          {/* Email                                             */}
-                          {/* ------------------------------------------------ */}
-
-                          <TD className="hidden 2xl:table-cell">
+                          </div>
+                        </TD>
+                        <TD className="whitespace-nowrap">{contact.company || '—'}</TD>
+                        <TD>
+                          {contact.email ? (
                             <a
                               href={`mailto:${contact.email}`}
-                              onClick={(
-                                event
-                              ) =>
-                                event.stopPropagation()
-                              }
-                              className="text-brand-600 transition-colors hover:text-brand-700"
+                              onClick={(event) => event.stopPropagation()}
+                              className="whitespace-nowrap text-brand-600 transition-colors hover:text-brand-700"
                             >
-                              {
-                                contact.email
-                              }
+                              {contact.email}
                             </a>
-                          </TD>
-
-                          {/* ------------------------------------------------ */}
-                          {/* Deals                                             */}
-                          {/* ------------------------------------------------ */}
-
-                          <TD className="text-right font-medium text-slate-900">
-                            {
-                              contactDeals.length
-                            }
-                          </TD>
-
-                          {/* ------------------------------------------------ */}
-                          {/* Value                                             */}
-                          {/* ------------------------------------------------ */}
-
-                          <TD className="whitespace-nowrap text-right font-medium text-slate-900">
-                            {formatCurrency(
-                              totalValue
-                            )}
-                          </TD>
-
-                          {/* ------------------------------------------------ */}
-                          {/* Last contact                                     */}
-                          {/* ------------------------------------------------ */}
-
-                          <TD className="hidden whitespace-nowrap text-slate-500 xl:table-cell">
-                            {formatDate(
-                              contact.lastContact
-                            )}
-                          </TD>
-
-                          {/* ------------------------------------------------ */}
-                          {/* Actions                                           */}
-                          {/* ------------------------------------------------ */}
-
-                          <TD>
-                            <div className="flex items-center justify-end gap-1">
-                              {contactDeals.length ===
-                              0 ? (
-                                <Button
-                                  variant="subtle"
-                                  size="sm"
-                                  icon={
-                                    Briefcase
-                                  }
-                                  onClick={(
-                                    event
-                                  ) => {
-                                    event.stopPropagation()
-
-                                    setMovingToDeal(
-                                      contact
-                                    )
-                                  }}
-                                  className="hidden whitespace-nowrap lg:inline-flex"
-                                >
-                                  Move to Deals
-                                </Button>
-                              ) : null}
-
-                              <RowActions
-                                label={`Actions for ${contact.company}`}
-                                actions={[
-                                  {
-                                    label:
-                                      'View',
-                                    icon:
-                                      Eye,
-                                    onClick:
-                                      () =>
-                                        setViewing(
-                                          contact
-                                        ),
-                                  },
-
-                                  {
-                                    label:
-                                      'Log activity',
-                                    icon:
-                                      NotebookPen,
-                                    onClick:
-                                      () =>
-                                        setLogging(
-                                          contact
-                                        ),
-                                  },
-
-                                  {
-                                    label:
-                                      contactDeals.length ===
-                                      0
-                                        ? 'Move to Deals'
-                                        : 'New deal',
-                                    icon:
-                                      Briefcase,
-                                    onClick:
-                                      () =>
-                                        setMovingToDeal(
-                                          contact
-                                        ),
-                                  },
-
-                                  {
-                                    label:
-                                      'Edit',
-                                    icon:
-                                      Pencil,
-                                    onClick:
-                                      () =>
-                                        openEditContact(
-                                          contact
-                                        ),
-                                  },
-
-                                  {
-                                    label:
-                                      'Delete',
-                                    icon:
-                                      Trash2,
-                                    tone:
-                                      'danger',
-                                    onClick:
-                                      () =>
-                                        setPendingDelete(
-                                          contact
-                                        ),
-                                  },
-                                ]}
-                              />
-                            </div>
-                          </TD>
-                        </TR>
-                      )
-                    }
-                  )}
+                          ) : '—'}
+                        </TD>
+                        <TD className="whitespace-nowrap">
+                          {contact.courseInterestedName ?? contact.course_interested_name ?? contact.courseInterested ?? contact.course_interested ?? '—'}
+                        </TD>
+                        <TD className="whitespace-nowrap">
+                          {contact.preferredLearningModeName ?? contact.preferred_learning_mode_name ?? contact.learningMode ?? contact.learning_mode ?? '—'}
+                        </TD>
+                        <TD className="whitespace-nowrap">
+                          {contact.preferredCourseDurationName ?? contact.preferred_course_duration_name ?? contact.courseDuration ?? contact.course_duration ?? '—'}
+                        </TD>
+                        <TD className="whitespace-nowrap">
+                          {contact.townCity ?? contact.town_city ?? contact.location ?? '—'}
+                        </TD>
+                        <TD className="whitespace-nowrap">{sourceLabel || 'Other'}</TD>
+                        <TD>
+                          <StatusBadge status={contact.status || 'Active'} dot={false} />
+                        </TD>
+                        <TD className="whitespace-nowrap">{contact.owner || contact.ownerName || contact.owner_name || '—'}</TD>
+                        <TD className="whitespace-nowrap text-slate-500">{formatDate(capturedDate)}</TD>
+                        <TD>
+                          <div className="flex items-center justify-end gap-1">
+                            {contactDeals.length === 0 ? (
+                              <Button
+                                variant="subtle"
+                                size="sm"
+                                icon={Briefcase}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  setMovingToDeal(contact)
+                                }}
+                                className="hidden whitespace-nowrap lg:inline-flex"
+                              >
+                                Move to Deals
+                              </Button>
+                            ) : null}
+                            <RowActions
+                              label={`Actions for ${contact.name || contact.company}`}
+                              actions={[
+                                { label: 'View', icon: Eye, onClick: () => setViewing(contact) },
+                                { label: 'Log activity', icon: NotebookPen, onClick: () => setLogging(contact) },
+                                {
+                                  label: contactDeals.length === 0 ? 'Move to Deals' : 'New deal',
+                                  icon: Briefcase,
+                                  onClick: () => setMovingToDeal(contact),
+                                },
+                                { label: 'Edit', icon: Pencil, onClick: () => openEditContact(contact) },
+                                { label: 'Delete', icon: Trash2, tone: 'danger', onClick: () => setPendingDelete(contact) },
+                              ]}
+                            />
+                          </div>
+                        </TD>
+                      </TR>
+                    )
+                  })}
                 </TBody>
               </Table>
+            </div>
+
+            {/* ----------------------------------------------------------- */}
+            {/* Mobile cards (<768px)                                       */}
+            {/* ----------------------------------------------------------- */}
+            <div className="space-y-3 p-3 min-[768px]:hidden">
+              {visible.map((contact) => {
+                const contactDeals =
+                  dealsByCompany[contact.company] ?? []
+
+                const totalValue =
+                  contactDeals.reduce(
+                    (sum, deal) => sum + (Number(deal.value) || 0),
+                    0
+                  )
+
+                return (
+                  <article
+                    key={`mobile-${contact.id}`}
+                    className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div
+                        className="flex min-w-0 flex-1 items-center gap-2.5 cursor-pointer"
+                        onClick={() => setViewing(contact)}
+                      >
+                        <Avatar name={contact.name} size="md" />
+                        <div className="min-w-0 flex-1">
+                          <h3 className="truncate text-sm font-semibold text-slate-900">
+                            {contact.name}
+                          </h3>
+                          <p className="truncate text-xs text-slate-500">
+                            {contact.company || 'No company'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="shrink-0 flex items-center gap-1.5">
+                        <StatusBadge
+                          status={
+                            contactDeals.length > 0
+                              ? 'In pipeline'
+                              : 'No deal yet'
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    {/* Metadata summary */}
+                    <div className="mt-3 grid grid-cols-2 gap-3 border-t border-slate-100 pt-3 text-xs">
+                      <div className="min-w-0">
+                        <span className="text-slate-400 block">Email</span>
+                        {contact.email ? (
+                          <a href={`mailto:${contact.email}`} onClick={(e) => e.stopPropagation()} className="block truncate text-brand-600 hover:underline">
+                            {contact.email}
+                          </a>
+                        ) : <span className="font-medium text-slate-700">—</span>}
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-slate-400 block">Course Interested</span>
+                        <span className="block truncate font-medium text-slate-700">
+                          {contact.courseInterestedName ?? contact.course_interested_name ?? contact.courseInterested ?? contact.course_interested ?? '—'}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-slate-400 block">Learning Mode</span>
+                        <span className="block truncate font-medium text-slate-700">
+                          {contact.preferredLearningModeName ?? contact.preferred_learning_mode_name ?? contact.learningMode ?? contact.learning_mode ?? '—'}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-slate-400 block">Course Duration</span>
+                        <span className="block truncate font-medium text-slate-700">
+                          {contact.preferredCourseDurationName ?? contact.preferred_course_duration_name ?? contact.courseDuration ?? contact.course_duration ?? '—'}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-slate-400 block">Town / City</span>
+                        <span className="block truncate font-medium text-slate-700">{contact.townCity ?? contact.town_city ?? contact.location ?? '—'}</span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-slate-400 block">Source</span>
+                        <span className="block truncate font-medium text-slate-700">{contact.sourceName ?? (typeof contact.source === 'string' ? contact.source : '') ?? 'Other'}</span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-slate-400 block">Owner</span>
+                        <span className="block truncate font-medium text-slate-700">{contact.owner || contact.ownerName || contact.owner_name || '—'}</span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-slate-400 block">Captured</span>
+                        <span className="block truncate font-medium text-slate-700">{formatDate(contact.movedAt ?? contact.becameContactAt ?? contact.createdAt)}</span>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setViewing(contact)}
+                        >
+                          View
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openEditContact(contact)}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setLogging(contact)}
+                        >
+                          Log
+                        </Button>
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        {contactDeals.length === 0 ? (
+                          <Button
+                            variant="subtle"
+                            size="sm"
+                            icon={Briefcase}
+                            onClick={() => setMovingToDeal(contact)}
+                          >
+                            Move
+                          </Button>
+                        ) : null}
+
+                        <RowActions
+                          label={`Actions for ${contact.company}`}
+                          actions={[
+                            {
+                              label: 'View',
+                              icon: Eye,
+                              onClick: () => setViewing(contact),
+                            },
+                            {
+                              label: 'Log activity',
+                              icon: NotebookPen,
+                              onClick: () => setLogging(contact),
+                            },
+                            {
+                              label:
+                                contactDeals.length === 0
+                                  ? 'Move to Deals'
+                                  : 'New deal',
+                              icon: Briefcase,
+                              onClick: () => setMovingToDeal(contact),
+                            },
+                            {
+                              label: 'Edit',
+                              icon: Pencil,
+                              onClick: () => openEditContact(contact),
+                            },
+                            {
+                              label: 'Delete',
+                              icon: Trash2,
+                              tone: 'danger',
+                              onClick: () => setPendingDelete(contact),
+                            },
+                          ]}
+                        />
+                      </div>
+                    </div>
+                  </article>
+                )
+              })}
             </div>
 
             {/* ----------------------------------------------------------- */}

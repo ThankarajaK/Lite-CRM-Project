@@ -333,23 +333,27 @@ export function useLocalData(currentUser) {
         company: item.company,
         email: item.email,
         phone: item.phone,
-        industry:
-          item.industry ||
-          'Other',
-        location:
-          item.location,
-        owner:
-          item.owner_name,
-        source:
-          item.source,
-        movedAt:
-          item.became_contact_at?.slice(
-            0,
-            10,
-          ),
+        industry: item.industry ?? '',
+        location: item.location ?? '',
+        owner: item.owner_name ?? '',
+        ownerId: item.owner_id ?? null,
+        source: item.source_name ?? '',
+        productId: item.product ?? null,
+        product_id: item.product ?? null,
+        productName: item.product_name ?? '',
+        learningModeId: item.learning_mode ?? null,
+        learning_mode_id: item.learning_mode ?? null,
+        learningModeName: item.learning_mode_name ?? '',
+        courseDurationId: item.course_duration ?? null,
+        course_duration_id: item.course_duration ?? null,
+        courseDurationName: item.course_duration_name ?? '',
+        townCity: item.town_city ?? '',
+        town_city: item.town_city ?? '',
+        status: item.status === 'qualified' ? 'Qualified' : item.status === 'not_qualified' ? 'Not Qualified' : (item.status ?? ''),
+        disqualification_reason: item.disqualification_reason ?? '',
+        movedAt: item.became_contact_at?.slice(0, 10),
         lastContact: null,
-        status: 'Active',
-        notes: item.notes,
+        notes: item.notes ?? '',
       }))
 
     setUsers(
@@ -1398,115 +1402,66 @@ export function useLocalData(currentUser) {
   // Contacts
   // ---------------------------------------------------------------------------
 
-  const addContact =
-    useCallback(
-      (values) => {
-        const contact = {
-          id: nextId('c'),
-          recordId:
-            nextId('r-'),
-          source: 'Other',
-          movedAt:
-            todayIso(),
-          lastContact:
-            todayIso(),
-          status: 'Active',
-          ...values,
-        }
-
-        setContacts(
-          (current) => [
-            contact,
-            ...current,
-          ],
-        )
-
-        audit(
-          contact.recordId,
-          {
-            type: 'Record updated',
-            title:
-              'Contact created directly',
-            detail:
-              'Added without coming through Leads.',
-            actor:
-              contact.owner,
-          },
-        )
-
-        pushFeed({
-          type: 'Contact created',
-          description: `added a contact — ${contact.company}`,
-          detail:
-            contact.name,
-          company:
-            contact.company,
-        })
-
-        return contact
-      },
-      [audit, pushFeed],
+  const addContact = useCallback(async (values) => {
+    const source = sources.find((item) =>
+      item.name === values.source || String(item.id) === String(values.source)
     )
+    const payload = {
+      name: String(values.name ?? '').trim(),
+      owner: values.ownerId || null,
+      company: values.company?.trim() || null,
+      email: values.email?.trim().toLowerCase() || null,
+      phone: values.phone?.trim() || null,
+      source: source?.id ?? null,
+      product: values.productId || null,
+      learning_mode: values.learningModeId || null,
+      course_duration: values.courseDurationId || null,
+      town_city: values.townCity?.trim() || null,
+      status: values.status === 'Qualified' ? 'qualified' : values.status === 'Not Qualified' ? 'not_qualified' : null,
+      disqualification_reason: values.disqualification_reason?.trim() || null,
+      notes: values.notes?.trim() || null,
+    }
+    if (!payload.name) throw new Error('Contact name is required.')
+    const response = await api('/contacts/', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+    await refreshCrm()
+    return response
+  }, [sources, refreshCrm])
 
-  const updateContact =
-    useCallback(
-      (id, values) => {
-        let target = null
-
-        setContacts(
-          (current) =>
-            current.map(
-              (contact) => {
-                if (
-                  contact.id !==
-                  id
-                ) {
-                  return contact
-                }
-
-                target =
-                  contact
-
-                return {
-                  ...contact,
-                  ...values,
-                }
-              },
-            ),
-        )
-
-        if (target) {
-          audit(
-            target.recordId,
-            {
-              type: 'Record updated',
-              title:
-                'Contact details edited',
-              detail: '',
-              actor:
-                values.owner ??
-                target.owner,
-            },
-          )
-        }
-      },
-      [audit],
+  const updateContact = useCallback(async (id, values) => {
+    const source = sources.find((item) =>
+      item.name === values.source || String(item.id) === String(values.source)
     )
+    const payload = {
+      name: String(values.name ?? '').trim(),
+      owner: values.ownerId || null,
+      company: values.company?.trim() || null,
+      email: values.email?.trim().toLowerCase() || null,
+      phone: values.phone?.trim() || null,
+      source: source?.id ?? null,
+      product: values.productId || null,
+      learning_mode: values.learningModeId || null,
+      course_duration: values.courseDurationId || null,
+      town_city: values.townCity?.trim() || null,
+      status: values.status === 'Qualified' ? 'qualified' : values.status === 'Not Qualified' ? 'not_qualified' : null,
+      disqualification_reason: values.disqualification_reason?.trim() || null,
+      notes: values.notes?.trim() || null,
+    }
+    if (!payload.name) throw new Error('Contact name is required.')
+    const response = await api(`/contacts/${id}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    })
+    await refreshCrm()
+    return response
+  }, [sources, refreshCrm])
 
-  const deleteContact =
-    useCallback(
-      (id) => {
-        setContacts(
-          (current) =>
-            current.filter(
-              (contact) =>
-                contact.id !==
-                id,
-            ),
-        )
-      },
-      [],
-    )
+  const deleteContact = useCallback(async (id) => {
+    await api(`/contacts/${id}/`, { method: 'DELETE' })
+    await refreshCrm()
+  }, [refreshCrm])
 
   // ---------------------------------------------------------------------------
   // Deals
@@ -1569,7 +1524,14 @@ export function useLocalData(currentUser) {
             },
           )
 
-        await refreshCrm()
+        // The deal POST has succeeded at this point. A refresh failure must not
+        // prevent the caller from receiving the created deal and showing its
+        // success notification.
+        try {
+          await refreshCrm()
+        } catch (refreshError) {
+          console.error('Deal was created, but CRM refresh failed:', refreshError)
+        }
 
         const deal = {
           id: nextId('d'),
@@ -1642,7 +1604,11 @@ export function useLocalData(currentUser) {
             contact.company,
         })
 
-        await refreshCrm()
+        try {
+          await refreshCrm()
+        } catch (refreshError) {
+          console.error('Deal was created, but CRM refresh failed:', refreshError)
+        }
 
         return {
           ...deal,

@@ -10,7 +10,10 @@ import {
 import PageHeader from '../components/ui/PageHeader'
 import Card, { CardHeader } from '../components/ui/Card'
 import Button from '../components/ui/Button'
+import Badge from '../components/ui/Badge'
 import Modal from '../components/ui/Modal'
+import Table, { TBody, TD, TH, THead, TR } from '../components/ui/Table'
+import { TableSkeleton } from '../components/ui/Skeleton'
 import { Field, Input } from '../components/ui/FormField'
 import EmptyState from '../components/ui/EmptyState'
 
@@ -408,93 +411,85 @@ export default function CourseDurations() {
         </div>
 
         {loading ? (
-          <div className="px-5 py-10 text-center text-sm text-slate-500">
-            Loading Course Durations...
+          <div className="p-4">
+            <TableSkeleton rows={4} columns={3} />
           </div>
-        ) : filteredCourseDurations.length ===
-          0 ? (
-          <div className="px-5 py-10">
-            <EmptyState
-              icon={Clock3}
-              title={
-                search
-                  ? 'No Course Durations found'
-                  : 'No Course Durations yet'
-              }
-              description={
-                search
-                  ? 'Try a different search term.'
-                  : 'Create the first Course Duration in your catalogue.'
-              }
-            />
-          </div>
+        ) : filteredCourseDurations.length === 0 ? (
+          <EmptyState
+            icon={Clock3}
+            title={
+              search
+                ? 'No Course Durations found'
+                : 'No Course Durations yet'
+            }
+            message={
+              search
+                ? 'Try a different search term.'
+                : 'Create the first Course Duration in your catalogue.'
+            }
+            action={
+              !search ? (
+                <Button
+                  icon={Plus}
+                  onClick={() => {
+                    setEditingCourseDuration(null)
+                    setShowForm(true)
+                  }}
+                >
+                  Add Course Duration
+                </Button>
+              ) : null
+            }
+          />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-100">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Course Duration
-                  </th>
+          <>
+            {/* Desktop / tablet table (>=768px) */}
+            <div className="hidden min-w-0 overflow-x-auto min-[768px]:block">
+              <Table className="min-w-[500px]">
+                <THead>
+                  <TR>
+                    <TH>Course Duration</TH>
+                    <TH>Status</TH>
+                    <TH className="text-right">Actions</TH>
+                  </TR>
+                </THead>
 
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Status
-                  </th>
-
-                  <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredCourseDurations.map(
-                  (
-                    courseDuration,
-                  ) => (
-                    <tr
-                      key={
-                        courseDuration.id
-                      }
-                      className="hover:bg-slate-50"
-                    >
-                      <td className="px-5 py-4">
+                <TBody>
+                  {filteredCourseDurations.map((courseDuration) => (
+                    <TR key={courseDuration.id}>
+                      <TD>
                         <div className="flex items-center gap-3">
                           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
                             <Clock3 className="h-4 w-4" />
                           </div>
 
                           <p className="font-medium text-slate-900">
-                            {
-                              courseDuration.name
-                            }
+                            {courseDuration.name}
                           </p>
                         </div>
-                      </td>
+                      </TD>
 
-                      <td className="px-5 py-4">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${
+                      <TD>
+                        <Badge
+                          tone={
                             courseDuration.active
-                              ? 'bg-emerald-50 text-emerald-700'
-                              : 'bg-slate-100 text-slate-600'
-                          }`}
+                              ? 'green'
+                              : 'slate'
+                          }
                         >
                           {courseDuration.active
                             ? 'Active'
                             : 'Inactive'}
-                        </span>
-                      </td>
+                        </Badge>
+                      </TD>
 
-                      <td className="px-5 py-4">
+                      <TD>
                         <div className="flex justify-end gap-2">
                           <Button
                             variant="secondary"
                             size="sm"
                             onClick={() =>
-                              openEdit(
-                                courseDuration,
-                              )
+                              openEdit(courseDuration)
                             }
                           >
                             <Pencil className="mr-1.5 h-3.5 w-3.5" />
@@ -502,33 +497,82 @@ export default function CourseDurations() {
                           </Button>
 
                           <Button
-                            variant="secondary"
+                            variant="danger"
                             size="sm"
                             disabled={
-                              deletingId ===
-                              courseDuration.id
+                              deletingId === courseDuration.id
                             }
                             onClick={() =>
-                              handleDelete(
-                                courseDuration,
-                              )
+                              handleDelete(courseDuration)
                             }
                           >
                             <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-
-                            {deletingId ===
-                            courseDuration.id
+                            {deletingId === courseDuration.id
                               ? 'Deleting...'
                               : 'Delete'}
                           </Button>
                         </div>
-                      </td>
-                    </tr>
-                  ),
-                )}
-              </tbody>
-            </table>
-          </div>
+                      </TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </div>
+
+            {/* Mobile cards (<768px) */}
+            <div className="space-y-3 p-3 min-[768px]:hidden">
+              {filteredCourseDurations.map((courseDuration) => (
+                <article
+                  key={`mobile-cd-${courseDuration.id}`}
+                  className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+                        <Clock3 className="h-4 w-4" />
+                      </div>
+                      <p className="truncate font-semibold text-sm text-slate-900">
+                        {courseDuration.name}
+                      </p>
+                    </div>
+
+                    <Badge
+                      tone={
+                        courseDuration.active ? 'green' : 'slate'
+                      }
+                    >
+                      {courseDuration.active ? 'Active' : 'Inactive'}
+                    </Badge>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => openEdit(courseDuration)}
+                      className="flex-1 sm:flex-initial"
+                    >
+                      <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                      Edit
+                    </Button>
+
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      disabled={deletingId === courseDuration.id}
+                      onClick={() => handleDelete(courseDuration)}
+                      className="flex-1 sm:flex-initial"
+                    >
+                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                      {deletingId === courseDuration.id
+                        ? 'Deleting...'
+                        : 'Delete'}
+                    </Button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </>
         )}
       </Card>
 

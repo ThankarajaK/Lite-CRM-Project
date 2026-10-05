@@ -73,6 +73,30 @@ export async function api(path, options = {}) {
   return body
 }
 
+export async function downloadFile(path, options = {}) {
+  const headers = {
+    ...(csrfToken() ? { 'X-CSRFToken': csrfToken() } : {}),
+    ...(options.headers || {}),
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: 'include',
+    ...options,
+    headers,
+  })
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    const detail = body.detail || 'The download could not be completed.'
+    const error = new Error(detail)
+    error.status = response.status
+    error.data = body
+    throw error
+  }
+
+  return response.blob()
+}
+
 export const crmApi = {
   // ---------------------------------------------------------------------------
   // Authentication
@@ -226,6 +250,31 @@ export const crmApi = {
   deleteLead: (id) =>
     api(`/leads/${id}/`, {
       method: 'DELETE',
+    }),
+
+    importLeadPreview: (formData) =>
+  api('/leads/import-preview/', {
+    method: 'POST',
+    body: formData,
+    headers: {},
+  }),
+
+  importLeads: (formData) =>
+    api('/leads/import/', {
+      method: 'POST',
+      body: formData,
+      headers: {},
+    }),
+
+  downloadLeadImportTemplate: (format = 'xlsx') =>
+    downloadFile(`/leads/import-template/`),
+
+  downloadLeadImportReport: (batchId) =>
+    downloadFile(`/leads/import-report/${batchId}/`),
+
+  reverseLeadImport: (batchId) =>
+    api(`/leads/import-reverse/${batchId}/`, {
+      method: 'POST',
     }),
 
   // ---------------------------------------------------------------------------
@@ -525,7 +574,9 @@ export const crmApi = {
       body: JSON.stringify(data),
     }),
 
-  deleteTask: (id) =>
+  deleteTask: (
+    id,
+  ) =>
     api(`/tasks/${id}/`, {
       method: 'DELETE',
     }),

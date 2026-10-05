@@ -19,6 +19,7 @@ export default function PageHeader({
   return (
     <div
       className="
+        crm-page-header
         flex
         w-full
         min-w-0
@@ -79,6 +80,7 @@ export default function PageHeader({
       {actions ? (
         <div
           className="
+            crm-page-header-actions
             flex
             w-full
             min-w-0

@@ -589,43 +589,27 @@ class DealSerializer(serializers.ModelSerializer):
 
 class ContactSerializer(serializers.ModelSerializer):
     owner_name = serializers.CharField(
-        source="record.owner.get_full_name",
-        read_only=True,
+        source="record.owner.get_full_name", read_only=True,
     )
-
-    record_id = serializers.UUIDField(
-        source="record.id",
-        read_only=True,
-    )
-
-    deal_count = serializers.IntegerField(
-        source="record.deals.count",
-        read_only=True,
-    )
+    record_id = serializers.UUIDField(source="record.id", read_only=True)
+    deal_count = serializers.IntegerField(source="record.deals.count", read_only=True)
+    source_name = serializers.CharField(source="source.name", read_only=True, allow_null=True)
+    product_name = serializers.CharField(source="product.name", read_only=True, allow_null=True)
+    learning_mode_name = serializers.CharField(source="learning_mode.name", read_only=True, allow_null=True)
+    course_duration_name = serializers.CharField(source="course_duration.name", read_only=True, allow_null=True)
+    owner_id = serializers.IntegerField(source="record.owner_id", read_only=True)
 
     class Meta:
         model = Contact
-
         fields = [
-            "id",
-            "record_id",
-            "name",
-            "company",
-            "email",
-            "phone",
-            "source",
-            "notes",
-            "industry",
-            "location",
-            "became_contact_at",
-            "owner_name",
-            "deal_count",
+            "id", "record_id", "name", "company", "email", "phone",
+            "source", "source_name", "product", "product_name",
+            "learning_mode", "learning_mode_name", "course_duration",
+            "course_duration_name", "town_city", "status",
+            "disqualification_reason", "notes", "industry", "location",
+            "became_contact_at", "owner_name", "owner_id", "deal_count",
         ]
-
-        read_only_fields = [
-            "id",
-            "became_contact_at",
-        ]
+        read_only_fields = ["id", "became_contact_at"]
 
 
 # ============================================================

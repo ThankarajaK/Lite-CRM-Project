@@ -124,7 +124,7 @@ export default function Settings() {
     role: roleName,
     company: 'LiteCRM',
     timezone: 'Asia/Kolkata',
-    currency: 'USD',
+    currency: 'INR',
   })
 
   const [passwords, setPasswords] = useState({
@@ -294,7 +294,7 @@ export default function Settings() {
       role: roleName,
       company: 'LiteCRM',
       timezone: 'Asia/Kolkata',
-      currency: 'USD',
+      currency: 'INR',
     })
   }
 
@@ -694,13 +694,7 @@ export default function Settings() {
                       currency: event.target.value,
                     }))
                   }
-                  options={[
-                    'USD',
-                    'EUR',
-                    'GBP',
-                    'INR',
-                    'SEK',
-                  ]}
+                  options={['INR']}
                 />
               </Field>
             </div>
