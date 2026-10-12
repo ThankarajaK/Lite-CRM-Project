@@ -23,7 +23,7 @@ export default function TaskFormModal({ open, onClose, onSubmit, task, contacts 
   const initialValues = useMemo(() => {
     const base = {
       title: '',
-      contact: contacts[0]?.company ?? '',
+      contact: contacts[0]?.recordId ?? '',
       dueDate: today(),
       dueTime: '09:00',
       owner: users[0]?.display_name ?? '',
@@ -77,7 +77,12 @@ export default function TaskFormModal({ open, onClose, onSubmit, task, contacts 
         <Field label="Contact" htmlFor="contact">
           <Select
             {...form.field('contact')}
-            options={contacts.map((contact) => contact.company)}
+            options={contacts.map((contact) => ({
+              value: contact.recordId,
+              label: contact.company
+                ? `${contact.name || 'Unnamed contact'} — ${contact.company}`
+                : (contact.name || 'Unnamed contact'),
+            }))}
             placeholder="Select a contact"
           />
         </Field>

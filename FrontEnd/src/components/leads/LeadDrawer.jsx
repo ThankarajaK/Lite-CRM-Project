@@ -65,6 +65,9 @@ export default function LeadDrawer({
   onDelete,
   onMoveToContact,
   onLogActivity,
+  activityHasMore = false,
+  onLoadMoreActivity,
+  onActivityChanged,
   canReassign,
   onReassign,
   users = [],
@@ -440,6 +443,10 @@ export default function LeadDrawer({
 
             <ActivityTimeline
               items={activity}
+              recordId={lead?.recordId}
+              hasMore={activityHasMore}
+              onLoadMore={onLoadMoreActivity}
+              onActivityChanged={onActivityChanged}
               action={
                 <Button
                   icon={NotebookPen}

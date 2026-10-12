@@ -51,6 +51,9 @@ export default function DealDrawer({
   onMove,
   onValueChange,
   onLogActivity,
+  activityHasMore = false,
+  onLoadMoreActivity,
+  onActivityChanged,
 }) {
   const [tab, setTab] = useState('details')
   const [scope, setScope] = useState('all')
@@ -153,7 +156,7 @@ export default function DealDrawer({
                 Details
               </h3>
               <div className="divide-y divide-slate-100">
-                <DetailRow icon={Building2} label="Contact">
+                <DetailRow icon={Building2} label="Name">
                   {deal.contact}
                 </DetailRow>
                 <DetailRow icon={Package} label="Product">
@@ -229,6 +232,10 @@ export default function DealDrawer({
 
             <ActivityTimeline
               items={shownActivity}
+              recordId={deal?.recordId}
+              hasMore={activityHasMore}
+              onLoadMore={onLoadMoreActivity}
+              onActivityChanged={onActivityChanged}
               action={
                 <Button icon={NotebookPen} onClick={() => onLogActivity(deal)}>
                   Log Activity

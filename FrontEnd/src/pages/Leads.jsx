@@ -80,6 +80,7 @@ export default function Leads() {
     moveLeadToContact,
     logActivity,
     loadLeadTimeline,
+    activityPagination,
     reassignLead,
     hasPermission,
     user,
@@ -950,9 +951,16 @@ export default function Leads() {
       });
 
       if (contact) {
+        const activityCount =
+          contact.activityCount ?? 0;
+        const activityLabel =
+          activityCount === 1
+            ? "activity retained"
+            : "activities retained";
+
         toast.success(
           "Moved to Contacts",
-          contact.company,
+          `${contact.company || "Contact"} · ${activityCount} logged ${activityLabel}`,
         );
 
         navigate("/contacts");
@@ -2129,6 +2137,25 @@ export default function Leads() {
               []
             : []
         }
+        activityHasMore={Boolean(viewing && activityPagination[viewing.recordId]?.nextPage)}
+        onLoadMoreActivity={() => {
+          if (!viewing) return Promise.resolve()
+          return loadLeadTimeline(viewing.recordId, activityPagination[viewing.recordId]?.nextPage)
+        }}
+        onActivityChanged={async () => {
+          if (!viewing) return
+
+          const logs = await loadLeadTimeline(
+            viewing.recordId,
+            1,
+          )
+
+          setViewing((current) =>
+            current
+              ? { ...current, ...logs }
+              : current,
+          )
+        }}
         history={
           viewing
             ? auditLog[

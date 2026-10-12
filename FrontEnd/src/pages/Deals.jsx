@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Briefcase, Plus } from 'lucide-react'
 import PageHeader from '../components/ui/PageHeader'
 import ProcessSteps from '../components/layout/ProcessSteps'
@@ -42,10 +42,13 @@ export default function Deals() {
     updateDeal,
     updateDealValue,
     moveDeal,
+    loadLeadTimeline,
+    activityPagination,
   } = useData()
 
   const toast = useToast()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const loading = useSimulatedLoading()
 
   const [query, setQuery] = useState('')
@@ -59,15 +62,43 @@ export default function Deals() {
   const [draggingDeal, setDraggingDeal] = useState(null)
   const [dropTarget, setDropTarget] = useState(null)
 
+  async function openDeal(deal) {
+    if (!deal) return
+    try {
+      const logs = await loadLeadTimeline(deal.recordId)
+      setViewing({ ...deal, ...logs })
+    } catch (error) {
+      console.error('Deal timeline load failed:', error)
+      setViewing(deal)
+      toast.error('Could not load deal history', error?.message || 'Please try again.')
+    }
+  }
+
+  // Allow links from Contact detail to open a specific Deal directly.
+  useEffect(() => {
+    const targetDealId = searchParams.get('deal')
+    if (!targetDealId || !deals.length) return
+
+    const targetDeal = deals.find((deal) => String(deal.id) === String(targetDealId))
+    if (!targetDeal) return
+
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('deal')
+      return next
+    }, { replace: true })
+    openDeal(targetDeal)
+  }, [deals, searchParams, setSearchParams])
+
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase()
 
     return deals.filter((deal) => {
       const matchesTerm =
         !term ||
-        deal.contact.toLowerCase().includes(term) ||
-        deal.product.toLowerCase().includes(term) ||
-        deal.name.toLowerCase().includes(term)
+        (deal.contact ?? '').toLowerCase().includes(term) ||
+        (deal.product ?? '').toLowerCase().includes(term) ||
+        (deal.name ?? '').toLowerCase().includes(term)
 
       return (
         matchesTerm &&
@@ -326,7 +357,7 @@ export default function Deals() {
                   }
                   activityCounts={activityCounts}
                   draggingId={draggingDeal?.id}
-                  onOpenDeal={setViewing}
+                  onOpenDeal={openDeal}
                   onValueChange={handleValueChange}
                   onDragStart={setDraggingDeal}
                   onDragEnd={() => {
@@ -396,6 +427,25 @@ export default function Deals() {
             ? (activityLog[viewing.recordId] ?? [])
             : []
         }
+        activityHasMore={Boolean(viewing && activityPagination[viewing.recordId]?.nextPage)}
+        onLoadMoreActivity={() => {
+          if (!viewing) return Promise.resolve()
+          return loadLeadTimeline(viewing.recordId, activityPagination[viewing.recordId]?.nextPage)
+        }}
+        onActivityChanged={async () => {
+          if (!viewing) return
+
+          const logs = await loadLeadTimeline(
+            viewing.recordId,
+            1,
+          )
+
+          setViewing((current) =>
+            current
+              ? { ...current, ...logs }
+              : current,
+          )
+        }}
         history={
           viewing
             ? (auditLog[viewing.recordId] ?? [])

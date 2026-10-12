@@ -40,7 +40,7 @@ import LogActivityModal from '../components/contacts/LogActivityModal'
 import { useData } from '../context/DataContext'
 import { useToast } from '../context/ToastContext'
 import { useSimulatedLoading } from '../hooks/useSimulatedLoading'
-import { formatDate } from '../utils/format'
+import { formatCurrency, formatDate } from '../utils/format'
 
 const PAGE_SIZE = 8
 
@@ -84,6 +84,8 @@ export default function Contacts() {
     deleteContact,
     logActivity,
     moveContactToDeal,
+    loadLeadTimeline,
+    activityPagination,
   } = useData()
 
   const toast = useToast()
@@ -110,30 +112,39 @@ export default function Contacts() {
   const [movingToDeal, setMovingToDeal] = useState(null)
   const [logging, setLogging] = useState(null)
 
+  async function openContact(contact) {
+    if (!contact) return
+    try {
+      const logs = await loadLeadTimeline(contact.recordId)
+      setViewing({ ...contact, ...logs })
+    } catch (error) {
+      console.error('Contact timeline load failed:', error)
+      setViewing(contact)
+      toast.error('Could not load contact history', error?.message || 'Please try again.')
+    }
+  }
+
   // ---------------------------------------------------------------------------
-  // Deals grouped by company
+  // Deals grouped by the shared Record ID (one timeline per Contact)
   // ---------------------------------------------------------------------------
 
-  /**
-   * Existing data relationship:
-   * deals are associated with a contact/company.
-   *
-   * Keeping this memoized avoids rebuilding the lookup object
-   * on every render.
-   */
-  const dealsByCompany = useMemo(
+  const dealsByRecordId = useMemo(
     () =>
       deals.reduce((map, deal) => {
-        const list = map[deal.contact] ?? []
-
-        list.push(deal)
-
-        map[deal.contact] = list
-
+        const recordId = deal.recordId ?? deal.record_id
+        if (!recordId) return map
+        if (!map[recordId]) map[recordId] = []
+        map[recordId].push(deal)
         return map
       }, {}),
     [deals]
   )
+
+  const getContactDeals = (contact) =>
+    dealsByRecordId[contact.recordId ?? contact.record_id] ?? []
+
+  const getContactTotalValue = (contactDeals) =>
+    contactDeals.reduce((sum, deal) => sum + (Number(deal.value) || 0), 0)
 
   // ---------------------------------------------------------------------------
   // Filtering
@@ -157,7 +168,7 @@ export default function Contacts() {
             .includes(term)
 
         const hasDeals =
-          (dealsByCompany[contact.company] ?? []).length > 0
+          (dealsByRecordId[contact.recordId ?? contact.record_id] ?? []).length > 0
 
         const matchesPipeline =
           !pipeline ||
@@ -175,17 +186,17 @@ export default function Contacts() {
         )
       })
       // Newest first.
-      .sort(
-        (a, b) =>
-          new Date(b.movedAt) -
-          new Date(a.movedAt)
-      )
+      .sort((a, b) => {
+        const dateA = Date.parse(a.movedAt ?? a.becameContactAt ?? a.createdAt ?? '') || 0
+        const dateB = Date.parse(b.movedAt ?? b.becameContactAt ?? b.createdAt ?? '') || 0
+        return dateB - dateA
+      })
   }, [
     contacts,
     query,
     owner,
     pipeline,
-    dealsByCompany,
+    dealsByRecordId,
   ])
 
   // ---------------------------------------------------------------------------
@@ -222,6 +233,55 @@ export default function Contacts() {
     setOwner('')
     setPipeline('')
     setPage(1)
+  }
+
+  // Export every contact matching the current search and filters (not just the
+  // visible page) as a real CSV file.
+  function handleExport() {
+    if (!filtered.length) {
+      toast.info('Nothing to export', 'No contacts match the current filters.')
+      return
+    }
+
+    const columns = [
+      ['Name', (contact) => contact.name],
+      ['Company', (contact) => contact.company],
+      ['Email', (contact) => contact.email],
+      ['Mobile', (contact) => contact.phone ?? contact.mobile],
+      ['Course Interested', (contact) => contact.courseInterested ?? contact.course_interested],
+      ['Learning Mode', (contact) => contact.learningMode ?? contact.learning_mode],
+      ['Course Duration', (contact) => contact.courseDuration ?? contact.course_duration],
+      ['Town / City', (contact) => contact.townCity ?? contact.town_city],
+      ['Source', (contact) => contact.source],
+      ['Status', (contact) => contact.status],
+      ['Pipeline State', (contact) => getContactDeals(contact).length ? 'In pipeline' : 'No deal yet'],
+      ['Deal Count', (contact) => getContactDeals(contact).length],
+      ['Total Deal Value', (contact) => getContactTotalValue(getContactDeals(contact))],
+      ['Owner', (contact) => contact.owner],
+      ['Last Contact Date', (contact) => contact.lastContactAt ?? contact.last_contact_at],
+      ['Captured At', (contact) => contact.createdAt ?? contact.created_at],
+    ]
+
+    const escapeCsv = (value) => {
+      const text = value == null ? '' : String(value)
+      return `"${text.replace(/"/g, '""')}"`
+    }
+    const rows = [
+      columns.map(([label]) => escapeCsv(label)).join(','),
+      ...filtered.map((contact) =>
+        columns.map(([, getValue]) => escapeCsv(getValue(contact))).join(','),
+      ),
+    ]
+    const blob = new Blob(['\uFEFF', rows.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `litecrm-contacts-${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+    toast.success('Contacts exported', `${filtered.length} contacts exported to CSV.`)
   }
 
   // ---------------------------------------------------------------------------
@@ -499,12 +559,7 @@ export default function Contacts() {
               <Button
                 variant="secondary"
                 icon={Download}
-                onClick={() =>
-                  toast.info(
-                    'Export started',
-                    `${filtered.length} contacts would be exported.`
-                  )
-                }
+                onClick={handleExport}
                 className="w-full sm:w-auto"
               >
                 Export
@@ -573,6 +628,10 @@ export default function Contacts() {
                     <TH>Town / City</TH>
                     <TH>Source</TH>
                     <TH>Status</TH>
+                    <TH>Pipeline State</TH>
+                    <TH className="text-right">Deal Count</TH>
+                    <TH className="text-right">Total Value</TH>
+                    <TH>Last Contact Date</TH>
                     <TH>Owner</TH>
                     <TH>Captured</TH>
                     <TH className="text-right">Actions</TH>
@@ -581,7 +640,7 @@ export default function Contacts() {
 
                 <TBody>
                   {visible.map((contact) => {
-                    const contactDeals = dealsByCompany[contact.company] ?? []
+                    const contactDeals = getContactDeals(contact)
                     const capturedDate = contact.movedAt ?? contact.becameContactAt ?? contact.createdAt
                     const sourceLabel =
                       contact.sourceName ??
@@ -591,7 +650,7 @@ export default function Contacts() {
                     return (
                       <TR
                         key={contact.id}
-                        onClick={() => setViewing(contact)}
+                        onClick={() => openContact(contact)}
                       >
                         <TD>
                           <div className="flex min-w-0 items-center gap-2.5">
@@ -634,6 +693,12 @@ export default function Contacts() {
                         <TD>
                           <StatusBadge status={contact.status || 'Active'} dot={false} />
                         </TD>
+                        <TD className="whitespace-nowrap">
+                          <StatusBadge status={contactDeals.length > 0 ? 'In pipeline' : 'No deal yet'} dot={false} />
+                        </TD>
+                        <TD className="text-right tabular-nums">{contactDeals.length}</TD>
+                        <TD className="whitespace-nowrap text-right tabular-nums">{formatCurrency(getContactTotalValue(contactDeals))}</TD>
+                        <TD className="whitespace-nowrap text-slate-500">{formatDate(contact.lastContact ?? contact.last_contact_at)}</TD>
                         <TD className="whitespace-nowrap">{contact.owner || contact.ownerName || contact.owner_name || '—'}</TD>
                         <TD className="whitespace-nowrap text-slate-500">{formatDate(capturedDate)}</TD>
                         <TD>
@@ -680,8 +745,7 @@ export default function Contacts() {
             {/* ----------------------------------------------------------- */}
             <div className="space-y-3 p-3 min-[768px]:hidden">
               {visible.map((contact) => {
-                const contactDeals =
-                  dealsByCompany[contact.company] ?? []
+                const contactDeals = getContactDeals(contact)
 
                 const totalValue =
                   contactDeals.reduce(
@@ -697,7 +761,7 @@ export default function Contacts() {
                     <div className="flex items-start justify-between gap-3">
                       <div
                         className="flex min-w-0 flex-1 items-center gap-2.5 cursor-pointer"
-                        onClick={() => setViewing(contact)}
+                        onClick={() => openContact(contact)}
                       >
                         <Avatar name={contact.name} size="md" />
                         <div className="min-w-0 flex-1">
@@ -720,8 +784,11 @@ export default function Contacts() {
                       </div>
                     </div>
 
-                    {/* Metadata summary */}
+                    {/* Pipeline summary and metadata */}
                     <div className="mt-3 grid grid-cols-2 gap-3 border-t border-slate-100 pt-3 text-xs">
+                      <div><span className="text-slate-400 block">Deal Count</span><span className="font-medium text-slate-700">{contactDeals.length}</span></div>
+                      <div><span className="text-slate-400 block">Total Value</span><span className="font-medium text-slate-700">{formatCurrency(getContactTotalValue(contactDeals))}</span></div>
+                      <div><span className="text-slate-400 block">Last Contact Date</span><span className="font-medium text-slate-700">{formatDate(contact.lastContact ?? contact.last_contact_at)}</span></div>
                       <div className="min-w-0">
                         <span className="text-slate-400 block">Email</span>
                         {contact.email ? (
@@ -772,7 +839,7 @@ export default function Contacts() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => setViewing(contact)}
+                          onClick={() => openContact(contact)}
                         >
                           View
                         </Button>
@@ -887,9 +954,7 @@ export default function Contacts() {
         deals={
           viewing
             ? (
-                dealsByCompany[
-                  viewing.company
-                ] ?? []
+                getContactDeals(viewing)
               )
             : []
         }
@@ -902,6 +967,25 @@ export default function Contacts() {
               )
             : []
         }
+        activityHasMore={Boolean(viewing && activityPagination[viewing.recordId]?.nextPage)}
+        onLoadMoreActivity={() => {
+          if (!viewing) return Promise.resolve()
+          return loadLeadTimeline(viewing.recordId, activityPagination[viewing.recordId]?.nextPage)
+        }}
+        onActivityChanged={async () => {
+          if (!viewing) return
+
+          const logs = await loadLeadTimeline(
+            viewing.recordId,
+            1,
+          )
+
+          setViewing((current) =>
+            current
+              ? { ...current, ...logs }
+              : current,
+          )
+        }}
         history={
           viewing
             ? (
@@ -920,6 +1004,10 @@ export default function Contacts() {
         onMoveToDeal={(contact) =>
           setMovingToDeal(contact)
         }
+        onOpenDeal={(deal) => {
+          setViewing(null)
+          navigate(`/deals?deal=${encodeURIComponent(deal.id)}`)
+        }}
         onLogActivity={(contact) =>
           setLogging(contact)
         }
@@ -952,9 +1040,7 @@ export default function Contacts() {
         deals={
           logging
             ? (
-                dealsByCompany[
-                  logging.company
-                ] ?? []
+                getContactDeals(logging)
               )
             : []
         }

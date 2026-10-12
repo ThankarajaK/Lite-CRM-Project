@@ -19,7 +19,7 @@ A role-aware CRM for leads, contacts, deals, activities and tasks.
    pip install -r BackEnd/requirements.txt
    cp BackEnd/.env.example BackEnd/.env
    python BackEnd/manage.py migrate
-   python BackEnd/manage.py seed_demo
+   python BackEnd/manage.py createsuperuser
    python BackEnd/manage.py runserver
    ```
 
@@ -31,7 +31,17 @@ A role-aware CRM for leads, contacts, deals, activities and tasks.
    npm run dev
    ```
 
-The demo seed creates `admin@litecrm.local` with password `Admin!234`.
+`python BackEnd/manage.py migrate` automatically creates the required LiteCRM roles and permissions (`Admin`, `Sales Manager`, and `Salesperson`).
+
+If you want the optional local demo users, catalogue entries, and lead sources used for testing, run:
+
+```bash
+python BackEnd/manage.py seed_demo
+```
+
+A Django superuser created with `createsuperuser` is automatically assigned the LiteCRM `Admin` role when the role exists.
+
+The seed command creates `admin@litecrm.local` with password `Admin!234`, `manager@litecrm.local` with password `Manager!234`, and `sales@litecrm.local` with password `Sales!234`.
 
 ## Current foundation
 

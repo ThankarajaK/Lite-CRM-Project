@@ -1,4 +1,7 @@
 from django.contrib.auth.password_validation import validate_password
+from django.conf import settings
+from django.utils import timezone
+from datetime import timedelta
 from rest_framework import serializers
 
 from .models import (
@@ -9,6 +12,7 @@ from .models import (
     HistoryEvent,
     Lead,
     LearningMode,
+    Notification,
     Product,
     Role,
     Source,
@@ -416,6 +420,19 @@ class ActivitySerializer(serializers.ModelSerializer):
         source="author.get_full_name",
         read_only=True,
     )
+    deal_name = serializers.CharField(
+        source="deal.name",
+        read_only=True,
+        allow_null=True,
+    )
+    author_id = serializers.IntegerField(read_only=True)
+    edited = serializers.SerializerMethodField()
+    voided = serializers.SerializerMethodField()
+    can_edit = serializers.SerializerMethodField()
+    can_void = serializers.SerializerMethodField()
+    voided_by_name = serializers.SerializerMethodField()
+    original_subject = serializers.SerializerMethodField()
+    original_description = serializers.SerializerMethodField()
 
     class Meta:
         model = Activity
@@ -427,15 +444,89 @@ class ActivitySerializer(serializers.ModelSerializer):
             "description",
             "happened_at",
             "deal",
+            "deal_name",
+            "author_id",
+            "author_id",
             "author_name",
             "created_at",
+            "edited",
+            "can_edit",
+            "can_void",
+            "can_edit",
+            "can_void",
+            "edited_at",
+            "original_subject",
+            "original_description",
+            "voided",
+            "void_reason",
+            "voided_at",
+            "voided_by_name",
         ]
 
         read_only_fields = [
             "id",
             "author_name",
             "created_at",
+            "edited",
+            "edited_at",
+            "original_subject",
+            "original_description",
+            "voided",
+            "void_reason",
+            "voided_at",
+            "voided_by_name",
         ]
+
+    def _user(self):
+        request = self.context.get("request")
+        return getattr(request, "user", None)
+
+    def get_can_edit(self, obj):
+        user = self._user()
+        if not user or not user.is_authenticated:
+            return False
+        if obj.voided_at or obj.author_id != user.id:
+            return False
+        if not user.has_crm_permission("correct_activity"):
+            return False
+        window = timedelta(hours=max(settings.ACTIVITY_CORRECTION_WINDOW_HOURS, 0))
+        return timezone.now() <= obj.created_at + window
+
+    def get_can_void(self, obj):
+        user = self._user()
+        if not user or not user.is_authenticated:
+            return False
+        if obj.voided_at or not user.has_crm_permission("correct_activity"):
+            return False
+        is_admin = user.is_superuser or getattr(getattr(user, "role", None), "key", None) == "admin"
+        return obj.author_id == user.id or is_admin
+
+    def get_edited(self, obj):
+        return bool(obj.edited_at)
+
+    def get_voided(self, obj):
+        return bool(obj.voided_at)
+
+    def get_voided_by_name(self, obj):
+        if not obj.voided_by:
+            return None
+        return obj.voided_by.get_full_name() or obj.voided_by.username
+
+    def _is_admin(self):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        role = getattr(user, "role", None)
+        return bool(
+            user
+            and user.is_authenticated
+            and (user.is_superuser or getattr(role, "key", None) == "admin")
+        )
+
+    def get_original_subject(self, obj):
+        return obj.original_subject if self._is_admin() else None
+
+    def get_original_description(self, obj):
+        return obj.original_description if self._is_admin() else None
 
 
 # ============================================================
@@ -443,21 +534,113 @@ class ActivitySerializer(serializers.ModelSerializer):
 # ============================================================
 
 class HistorySerializer(serializers.ModelSerializer):
-    actor_name = serializers.CharField(
-        source="actor.get_full_name",
-        read_only=True,
-    )
+    actor_name = serializers.SerializerMethodField()
+    action_label = serializers.SerializerMethodField()
+    detail_text = serializers.SerializerMethodField()
+
+    ACTION_LABELS = {
+        "lead_captured": "Lead captured",
+        "qualified": "Qualified",
+        "not_qualified": "Not qualified",
+        "moved_to_contacts": "Moved to Contacts",
+        "deal_created": "Deal created",
+        "deal_value_updated": "Value updated",
+        "deal_stage_changed": "Stage changed",
+        "deal_won": "Deal won",
+        "deal_lost": "Deal lost",
+        "reassigned": "Reassigned",
+        "edited": "Edited",
+        "merged": "Merged",
+        "deleted": "Deleted",
+        "activity_edited": "Activity corrected",
+        "activity_voided": "Activity voided",
+        # Legacy rows already stored before Epic 9 completion.
+        "lead_updated": "Edited",
+        "lead_status_changed": "Stage changed",
+        "lead_reassigned": "Reassigned",
+        "lead_deleted": "Deleted",
+        "contact_updated": "Edited",
+        "contact_created_directly": "Edited",
+        "deal_stage_changed": "Stage changed",
+    }
 
     class Meta:
         model = HistoryEvent
-
         fields = [
             "id",
             "action",
+            "action_label",
             "detail",
+            "detail_text",
             "actor_name",
             "created_at",
         ]
+        read_only_fields = fields
+
+    def get_actor_name(self, obj):
+        if obj.actor is None:
+            return "System"
+        return obj.actor.get_full_name() or obj.actor.username or obj.actor.email or "User"
+
+    def get_action_label(self, obj):
+        return self.ACTION_LABELS.get(
+            obj.action,
+            obj.action.replace("_", " ").strip().title(),
+        )
+
+    def get_detail_text(self, obj):
+        detail = obj.detail or {}
+        if not detail:
+            return ""
+
+        # Keep the API detail structured while giving the UI a concise,
+        # human-readable explanation of what changed.
+        if "from" in detail or "to" in detail:
+            before = detail.get("from", "—")
+            after = detail.get("to", "—")
+            if detail.get("reason"):
+                return f"{before} → {after} · Reason: {detail['reason']}"
+            return f"{before} → {after}"
+
+        if "from_owner" in detail or "to_owner" in detail:
+            return f"Owner {detail.get('from_owner', '—')} → {detail.get('to_owner', '—')}"
+
+        if "changed" in detail and isinstance(detail["changed"], dict):
+            parts = []
+            for field, change in detail["changed"].items():
+                if isinstance(change, dict):
+                    parts.append(f"{field}: {change.get('from', '—')} → {change.get('to', '—')}")
+            return " · ".join(parts)
+
+        if "product" in detail and "value_minor" in detail:
+            value = int(detail.get("value_minor") or 0) / 100
+            return f"{detail['product']} · ₹{value:,.2f}"
+
+        if "from_value_minor" in detail or "to_value_minor" in detail:
+            before = int(detail.get("from_value_minor") or 0) / 100
+            after = int(detail.get("to_value_minor") or 0) / 100
+            return f"₹{before:,.2f} → ₹{after:,.2f}"
+
+        if "from_stage" in detail or "to_stage" in detail:
+            return f"{detail.get('from_stage', '—')} → {detail.get('to_stage', '—')}"
+
+        if "reason" in detail and detail.get("reason"):
+            return str(detail["reason"])
+
+        if "fields" in detail and isinstance(detail["fields"], list):
+            return "Changed: " + ", ".join(str(field) for field in detail["fields"])
+
+        if "name" in detail and "company" in detail:
+            return f"{detail.get('name') or 'Record'} · {detail.get('company') or '—'}"
+
+        if "batch_id" in detail:
+            return f"Import batch {detail['batch_id']}"
+
+        return " · ".join(
+            f"{str(key).replace('_', ' ').title()}: {value}"
+            for key, value in detail.items()
+            if value not in (None, "", [], {})
+        )
 
 
 # ============================================================
@@ -598,6 +781,11 @@ class ContactSerializer(serializers.ModelSerializer):
     learning_mode_name = serializers.CharField(source="learning_mode.name", read_only=True, allow_null=True)
     course_duration_name = serializers.CharField(source="course_duration.name", read_only=True, allow_null=True)
     owner_id = serializers.IntegerField(source="record.owner_id", read_only=True)
+    last_contact_at = serializers.DateTimeField(
+    source="record.last_contact_at",
+    read_only=True,
+    allow_null=True,
+)
 
     class Meta:
         model = Contact
@@ -607,7 +795,7 @@ class ContactSerializer(serializers.ModelSerializer):
             "learning_mode", "learning_mode_name", "course_duration",
             "course_duration_name", "town_city", "status",
             "disqualification_reason", "notes", "industry", "location",
-            "became_contact_at", "owner_name", "owner_id", "deal_count",
+            "became_contact_at", "owner_name", "owner_id", "deal_count","last_contact_at",
         ]
         read_only_fields = ["id", "became_contact_at"]
 
@@ -1119,3 +1307,20 @@ class AdminUserRoleSerializer(serializers.Serializer):
             )
 
         return value
+
+
+# ============================================================
+# IN-APP NOTIFICATIONS
+# ============================================================
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = [
+            "id",
+            "event_type",
+            "message",
+            "read_at",
+            "created_at",
+        ]
+        read_only_fields = fields

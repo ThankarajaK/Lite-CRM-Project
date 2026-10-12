@@ -12,7 +12,7 @@ SALESPERSON_PERMISSIONS = [
     "view_leads", "capture_lead", "edit_lead", "set_lead_status", "move_to_contact",
     "view_contacts", "edit_contact", "create_deal", "view_deals", "edit_deal",
     "edit_deal_value", "move_deal", "log_activity", "view_activity", "view_history",
-    "create_task",
+    "create_task","close_won", "close_lost", "correct_activity",
 ]
 
 

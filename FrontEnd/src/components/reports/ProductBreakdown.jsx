@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 import Card, { CardHeader } from '../ui/Card'
 import Table, { TBody, TD, TH, THead, TR } from '../ui/Table'
-import { PRODUCTS } from '../../data/mockData'
 import { formatCurrency } from '../../utils/format'
 
 /**
@@ -12,7 +11,8 @@ import { formatCurrency } from '../../utils/format'
  */
 export default function ProductBreakdown({ deals }) {
   const rows = useMemo(() => {
-    return PRODUCTS.map((product) => {
+    const products = [...new Set(deals.map((deal) => deal.product).filter(Boolean))]
+    return products.map((product) => {
       const productDeals = deals.filter((deal) => deal.product === product)
       const won = productDeals.filter((deal) => deal.stage === 'Won')
       const open = productDeals.filter((deal) => !['Won', 'Lost'].includes(deal.stage))

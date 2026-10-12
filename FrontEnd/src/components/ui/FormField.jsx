@@ -61,11 +61,12 @@ export function Select({ error, className, options = [], placeholder, children, 
         </option>
       ) : null}
       {children ??
-        options.map((option) => {
+        options.filter((option) => option != null).map((option, index) => {
           const value = typeof option === 'string' ? option : option.value
           const label = typeof option === 'string' ? option : option.label
+          if (value == null || label == null) return null
           return (
-            <option key={value} value={value}>
+            <option key={`${value}-${index}`} value={value}>
               {label}
             </option>
           )

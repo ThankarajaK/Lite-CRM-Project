@@ -47,7 +47,11 @@ export default function ContactDrawer({
   onClose,
   onEdit,
   onMoveToDeal,
+  onOpenDeal,
   onLogActivity,
+  activityHasMore = false,
+  onLoadMoreActivity,
+  onActivityChanged,
 }) {
   const [tab, setTab] = useState('overview')
 
@@ -58,20 +62,22 @@ export default function ContactDrawer({
     .filter((deal) => deal.stage === 'Won')
     .reduce((sum, deal) => sum + (Number(deal.value) || 0), 0)
   const hasDeals = deals.length > 0
+  const displayName = contact.name || contact.company || 'Contact'
+  const companyLabel = contact.company || 'No company'
 
   return (
     <Drawer
       open={open}
       onClose={onClose}
       width="lg"
-      title={contact.company}
+      title={displayName}
       header={
         <div className="flex items-center gap-3">
-          <Avatar name={contact.company} size="lg" />
+          <Avatar name={displayName} size="lg" />
           <div className="min-w-0">
-            <h2 className="truncate text-base font-semibold text-slate-900">{contact.company}</h2>
+            <h2 className="truncate text-base font-semibold text-slate-900">{displayName}</h2>
             <p className="truncate text-sm text-slate-500">
-              {contact.name} · {contact.industry}
+              {contact.company ? `${contact.company}${contact.industry ? ` · ${contact.industry}` : ''}` : (contact.industry || 'Contact')}
             </p>
           </div>
         </div>
@@ -156,7 +162,7 @@ export default function ContactDrawer({
                   {contact.name}
                 </DetailRow>
                 <DetailRow icon={Building2} label="Company">
-                  {contact.company} · {contact.industry}
+                  {companyLabel}{contact.industry ? ` · ${contact.industry}` : ''}
                 </DetailRow>
                 <DetailRow icon={Mail} label="Email">
                   <a
@@ -169,8 +175,17 @@ export default function ContactDrawer({
                 <DetailRow icon={Phone} label="Phone">
                   {contact.phone || '—'}
                 </DetailRow>
-                <DetailRow icon={MapPin} label="Location">
-                  {contact.location || '—'}
+                <DetailRow icon={MapPin} label="Town / City">
+                  {contact.townCity || contact.town_city || contact.location || '—'}
+                </DetailRow>
+                <DetailRow icon={Sparkles} label="Course interested">
+                  {contact.productName || contact.courseInterestedName || contact.course_interested_name || '—'}
+                </DetailRow>
+                <DetailRow icon={Sparkles} label="Preferred learning mode">
+                  {contact.learningModeName || contact.preferredLearningModeName || contact.preferred_learning_mode_name || '—'}
+                </DetailRow>
+                <DetailRow icon={Sparkles} label="Preferred course duration">
+                  {contact.courseDurationName || contact.preferredCourseDurationName || contact.preferred_course_duration_name || '—'}
                 </DetailRow>
                 <DetailRow icon={UserCircle2} label="Owner">
                   <span className="inline-flex items-center gap-2">
@@ -182,7 +197,10 @@ export default function ContactDrawer({
                   {contact.source ?? '—'}
                 </DetailRow>
                 <DetailRow icon={CalendarClock} label="Last contact">
-                  {formatDate(contact.lastContact)}
+                  {formatDate(contact.lastContact ?? contact.last_contact_at)}
+                </DetailRow>
+                <DetailRow icon={NotebookPen} label="Lead feedback / notes">
+                  {contact.notes || '—'}
                 </DetailRow>
               </div>
             </section>
@@ -205,24 +223,28 @@ export default function ContactDrawer({
           ) : (
             <ul className="space-y-2">
               {deals.map((deal) => (
-                <li
-                  key={deal.id}
-                  className="rounded-lg border border-slate-200 p-3.5 transition-colors hover:border-slate-300"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-slate-900">{deal.name}</p>
-                      <p className="mt-0.5 truncate text-xs text-slate-500">
-                        {deal.product} · close {formatDate(deal.closeDate)} · {deal.owner}
-                      </p>
+                <li key={deal.id}>
+                  <button
+                    type="button"
+                    onClick={() => onOpenDeal?.(deal)}
+                    className="w-full rounded-lg border border-slate-200 p-3.5 text-left transition-colors hover:border-brand-300 hover:bg-brand-50/30 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                    aria-label={`Open deal ${deal.name || deal.product || deal.id}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-brand-700">{deal.name || deal.product || `Deal ${deal.id}`}</p>
+                        <p className="mt-0.5 truncate text-xs text-slate-500">
+                          {deal.product || '—'} · Expected close {formatDate(deal.closeDate ?? deal.expected_close_date)} · {deal.owner || '—'}
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="text-sm font-semibold text-slate-900">
+                          {formatCurrency(deal.value)}
+                        </p>
+                        <StatusBadge status={deal.stage} dot={false} className="mt-1" />
+                      </div>
                     </div>
-                    <div className="shrink-0 text-right">
-                      <p className="text-sm font-semibold text-slate-900">
-                        {formatCurrency(deal.value)}
-                      </p>
-                      <StatusBadge status={deal.stage} dot={false} className="mt-1" />
-                    </div>
-                  </div>
+                  </button>
                 </li>
               ))}
             </ul>
@@ -241,6 +263,10 @@ export default function ContactDrawer({
             </Button>
             <ActivityTimeline
               items={activity}
+              recordId={contact?.recordId}
+              hasMore={activityHasMore}
+              onLoadMore={onLoadMoreActivity}
+              onActivityChanged={onActivityChanged}
               action={
                 <Button icon={NotebookPen} onClick={() => onLogActivity(contact)}>
                   Log Activity

@@ -7,6 +7,7 @@ from .views import (
     DealViewSet,
     LeadViewSet,
     LearningModeViewSet,
+    NotificationViewSet,
     ProductViewSet,
     RecordViewSet,
     RoleViewSet,
@@ -67,6 +68,12 @@ router.register(
     "records",
     RecordViewSet,
     basename="record",
+)
+
+router.register(
+    "notifications",
+    NotificationViewSet,
+    basename="notification",
 )
 
 router.register(

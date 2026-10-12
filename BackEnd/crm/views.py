@@ -16,6 +16,7 @@ from django.http import HttpResponse
 from django.db.models import Q
 from django.utils import timezone
 from django.core.validators import validate_email
+from django.core.paginator import Paginator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
@@ -23,17 +24,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from .models import Activity, Contact, CrmSession, Deal, ImportBatch, Lead, Notification, PasswordResetToken, Permission, Product, Record, Role, Source, Task, User, LearningMode, CourseDuration
-from .serializers import ActivitySerializer, ContactSerializer, DealSerializer, HistorySerializer, LeadSerializer, ProductSerializer, RoleSerializer, SourceSerializer, TaskSerializer, UserSummarySerializer, LearningModeSerializer, CourseDurationSerializer
-from .services import (
-    assert_visible,
-    audit,
-    convert_lead,
-    history,
-    record_is_visible,
-    normalize_email,
-    normalize_phone,
-    validate_unique_contact_details,
-)
+from .serializers import ActivitySerializer, ContactSerializer, DealSerializer, HistorySerializer, LeadSerializer, NotificationSerializer, ProductSerializer, RoleSerializer, SourceSerializer, TaskSerializer, UserSummarySerializer, LearningModeSerializer, CourseDurationSerializer
+from .services import assert_visible, audit, can_read_record_history, convert_lead, history, record_is_visible
 from .authentication import find_user, normalize_identifier
 
 
@@ -45,6 +37,16 @@ def visible_records(user):
 def require_permission(request, key):
     if not request.user.has_crm_permission(key):
         raise PermissionDenied("You do not have permission to perform this action.")
+
+
+def _history_changes(before, after, fields):
+    changed = {}
+    for field in fields:
+        old = before.get(field)
+        new = after.get(field)
+        if old != new:
+            changed[field] = {"from": old, "to": new}
+    return changed
 
 
 class LeadViewSet(viewsets.ModelViewSet):
@@ -110,7 +112,10 @@ class LeadViewSet(viewsets.ModelViewSet):
             lead.record,
             request.user,
             "lead_captured",
-            {"source": lead.source.name if lead.source else None, "owner_id": owner.id},
+            {
+                "source": lead.source.name if lead.source else None,
+                "owner": owner.get_full_name() or owner.username,
+            },
         )
         audit(request.user, "lead.created", lead, after=serializer.data)
         response_data = self.get_serializer(lead).data
@@ -163,13 +168,34 @@ class LeadViewSet(viewsets.ModelViewSet):
             if old_owner != new_owner:
                 lead.record.owner_id = new_owner
                 lead.record.save(update_fields=["owner"])
-                history(lead.record, request.user, "lead_reassigned", {"from_owner_id": old_owner, "to_owner_id": new_owner})
+                old_owner_obj = User.objects.filter(pk=old_owner).first()
+                new_owner_obj = User.objects.filter(pk=new_owner).first()
+                history(
+                    lead.record,
+                    request.user,
+                    "reassigned",
+                    {
+                        "from_owner": old_owner_obj.get_full_name() or old_owner_obj.username if old_owner_obj else str(old_owner),
+                        "to_owner": new_owner_obj.get_full_name() or new_owner_obj.username if new_owner_obj else str(new_owner),
+                    },
+                )
                 audit(request.user, "lead.reassigned", lead, before={"owner_id": old_owner}, after={"owner_id": new_owner})
         if "status" in payload and payload.get("status") != before.get("status"):
-            history(lead.record, request.user, "lead_status_changed", {"from": before.get("status"), "to": updated.status, "reason": updated.disqualification_reason})
-        if any(field in payload for field in ("name", "company", "email", "phone", "source", "product", "learning_mode", "course_duration", "town_city", "notes")):
-            audit(request.user, "lead.updated", updated, before=before, after=self.get_serializer(updated).data)
-            history(lead.record, request.user, "lead_updated", {"changed_fields": list(payload.keys())})
+            history(
+                lead.record,
+                request.user,
+                "qualified" if updated.status == Lead.Status.QUALIFIED else "not_qualified",
+                {"from": before.get("status"), "to": updated.status, "reason": updated.disqualification_reason},
+            )
+        after = self.get_serializer(updated).data
+        changed = _history_changes(
+            before,
+            after,
+            ("name", "company", "email", "phone", "source", "product", "learning_mode", "course_duration", "town_city", "notes"),
+        )
+        if changed:
+            audit(request.user, "lead.updated", updated, before=before, after=after)
+            history(lead.record, request.user, "edited", {"changed": changed})
         return Response(self.get_serializer(updated).data)
 
     def destroy(self, request, *args, **kwargs):
@@ -177,7 +203,7 @@ class LeadViewSet(viewsets.ModelViewSet):
         lead = self.get_object()
         lead.deleted_at = timezone.now()
         lead.save(update_fields=["deleted_at"])
-        history(lead.record, request.user, "lead_deleted", {"name": lead.name, "company": lead.company})
+        history(lead.record, request.user, "deleted", {"entity": "Lead", "name": lead.name, "company": lead.company})
         audit(request.user, "lead.deleted", lead, after={"deleted_at": lead.deleted_at.isoformat()})
         return Response(status=204)
 
@@ -199,7 +225,12 @@ class LeadViewSet(viewsets.ModelViewSet):
         lead.status = new_status
         lead.disqualification_reason = reason if new_status == Lead.Status.NOT_QUALIFIED else ""
         lead.save(update_fields=["status", "disqualification_reason"])
-        history(lead.record, request.user, "lead_status_changed", {"from": old, "to": new_status, "reason": lead.disqualification_reason})
+        history(
+            lead.record,
+            request.user,
+            "qualified" if new_status == Lead.Status.QUALIFIED else "not_qualified",
+            {"from": old, "to": new_status, "reason": lead.disqualification_reason},
+        )
         audit(request.user, "lead.status_changed", lead, before={"status": old}, after={"status": new_status, "reason": lead.disqualification_reason})
         return Response(self.get_serializer(lead).data)
 
@@ -215,7 +246,15 @@ class LeadViewSet(viewsets.ModelViewSet):
             return Response(self.get_serializer(lead).data)
         lead.record.owner = owner
         lead.record.save(update_fields=["owner"])
-        history(lead.record, request.user, "lead_reassigned", {"from_owner_id": old_owner, "to_owner_id": owner.id})
+        history(
+            lead.record,
+            request.user,
+            "reassigned",
+            {
+                "from_owner": (User.objects.filter(pk=old_owner).first().get_full_name() if User.objects.filter(pk=old_owner).first() else str(old_owner)),
+                "to_owner": (owner.get_full_name() or owner.username),
+            },
+        )
         audit(request.user, "lead.reassigned", lead, before={"owner_id": old_owner}, after={"owner_id": owner.id})
         return Response(self.get_serializer(lead).data)
 
@@ -272,6 +311,7 @@ class LeadViewSet(viewsets.ModelViewSet):
             values.append(["Status", value])
             values.append(["Status", label])
         values.append(["Duplicate action", "skip"])
+        values.append(["Duplicate action", "import_anyway"])
         values.append(["Duplicate action", "update"])
 
         instructions = workbook.create_sheet("Instructions")
@@ -453,50 +493,17 @@ class LeadViewSet(viewsets.ModelViewSet):
         return errors
 
     @classmethod
-    def _find_import_duplicates(cls, email, phone):
-        email = normalize_email(email)
-        phone = normalize_phone(phone)
-        if not email and not phone:
+    def _find_import_duplicates(cls, email):
+        if not email:
             return []
-
-        duplicates = {}
-
-        leads = Lead.objects.filter(deleted_at__isnull=True).select_related("record__owner")
-        contacts = Contact.objects.filter(deleted_at__isnull=True).select_related("record__owner")
-
+        duplicates = []
+        leads = Lead.objects.filter(email__iexact=email, deleted_at__isnull=True).select_related("record__owner")
         for lead in leads:
-            email_match = bool(email and normalize_email(lead.email) == email)
-            phone_match = bool(phone and normalize_phone(lead.phone) == phone)
-            if email_match or phone_match:
-                key = ("lead", lead.id)
-                duplicates[key] = {
-                    "type": "lead",
-                    "id": lead.id,
-                    "name": lead.name,
-                    "email": lead.email,
-                    "phone": lead.phone,
-                    "matched_fields": [
-                        field for field, matched in (("email", email_match), ("phone", phone_match)) if matched
-                    ],
-                }
-
+            duplicates.append({"type": "lead", "id": lead.id, "name": lead.name, "email": lead.email})
+        contacts = Contact.objects.filter(email__iexact=email, deleted_at__isnull=True).select_related("record__owner")
         for contact in contacts:
-            email_match = bool(email and normalize_email(contact.email) == email)
-            phone_match = bool(phone and normalize_phone(contact.phone) == phone)
-            if email_match or phone_match:
-                key = ("contact", contact.id)
-                duplicates[key] = {
-                    "type": "contact",
-                    "id": contact.id,
-                    "name": contact.name,
-                    "email": contact.email,
-                    "phone": contact.phone,
-                    "matched_fields": [
-                        field for field, matched in (("email", email_match), ("phone", phone_match)) if matched
-                    ],
-                }
-
-        return list(duplicates.values())
+            duplicates.append({"type": "contact", "id": contact.id, "name": contact.name, "email": contact.email})
+        return duplicates
 
     @classmethod
     def _normalise_duplicate_decisions(cls, request):
@@ -561,7 +568,7 @@ class LeadViewSet(viewsets.ModelViewSet):
                     row["source"] = default_source.name
 
             errors = self._validate_import_row(row, row_number, refs)
-            duplicates = self._find_import_duplicates(row.get("email", ""), row.get("phone", ""))
+            duplicates = self._find_import_duplicates(str(row.get("email", "")).strip().lower())
             if duplicates:
                 duplicate_rows.append({"row": row_number, "duplicates": duplicates})
             item = {
@@ -635,17 +642,17 @@ class LeadViewSet(viewsets.ModelViewSet):
             row = self._apply_import_mapping(raw_row, mapping)
             errors = self._validate_import_row(row, row_number, refs)
             email = str(row.get("email", "")).strip().lower()
-            duplicates = self._find_import_duplicates(email, row.get("phone", ""))
+            duplicates = self._find_import_duplicates(email)
             decision = duplicate_decisions.get(str(row_number), "")
 
-            if duplicates and decision not in {"skip", "update"}:
-                errors = errors + ["Duplicate found; choose skip or update. Email and mobile numbers must be unique."]
-            if decision == "import_anyway" and duplicates:
-                errors = errors + ["Import anyway is not allowed when an email or mobile number already exists."]
+            if duplicates and decision not in {"skip", "import_anyway", "update"}:
+                errors = errors + ["Duplicate found; choose skip, import_anyway, or update"]
             if decision == "skip" or str(row_number) in skip_rows:
                 skipped_count += 1
                 prepared.append({"row": row_number, "data": row, "duplicates": duplicates, "decision": "skip", "errors": errors})
                 continue
+            if decision == "import_anyway" and duplicates:
+                duplicates = []
             if decision == "update" and not duplicates:
                 errors.append("No existing lead or contact was found to update")
             if errors:
@@ -727,16 +734,8 @@ class LeadViewSet(viewsets.ModelViewSet):
                             lead.town_city = row.get("town_city", lead.town_city)
                             lead.status = status_value
                             lead.notes = row.get("notes", lead.notes)
-                            validate_unique_contact_details(
-                                email=email,
-                                phone=row.get("phone", lead.phone),
-                                exclude_lead_id=lead.id,
-                                check_leads=True,
-                                check_contacts=True,
-                            )
-                            lead.email = email
-                            lead.save(update_fields=["name", "company", "email", "phone", "source", "product", "learning_mode", "course_duration", "town_city", "status", "notes"])
-                            history(lead.record, request.user, "lead_imported", {"batch_id": batch_id, "row": row_number, "operation": "update", "before": before})
+                            lead.save(update_fields=["name", "company", "phone", "source", "product", "learning_mode", "course_duration", "town_city", "status", "notes"])
+                            history(lead.record, request.user, "edited", {"changed": {"import_batch": {"from": None, "to": batch_id}, "row": {"from": None, "to": row_number}}})
                         else:
                             contact = Contact.objects.select_related("record").get(pk=duplicate["id"])
                             before = {
@@ -752,26 +751,12 @@ class LeadViewSet(viewsets.ModelViewSet):
                             contact.phone = row.get("phone", contact.phone)
                             contact.source = source
                             contact.notes = row.get("notes", contact.notes)
-                            validate_unique_contact_details(
-                                email=email,
-                                phone=row.get("phone", contact.phone),
-                                exclude_contact_id=contact.id,
-                                check_leads=True,
-                                check_contacts=True,
-                            )
-                            contact.email = email or None
-                            contact.save(update_fields=["name", "company", "email", "phone", "source", "notes"])
-                            history(contact.record, request.user, "contact_imported", {"batch_id": batch_id, "row": row_number, "operation": "update", "before": before})
+                            contact.save(update_fields=["name", "company", "phone", "source", "notes"])
+                            history(contact.record, request.user, "edited", {"changed": {"import_batch": {"from": None, "to": batch_id}, "row": {"from": None, "to": row_number}}})
                         updated_count += 1
                         outcome_rows.append({"row": row_number, "result": "updated", "record_type": duplicate["type"], "record_id": duplicate["id"]})
                         continue
 
-                    validate_unique_contact_details(
-                        email=email,
-                        phone=row.get("phone", ""),
-                        check_leads=True,
-                        check_contacts=True,
-                    )
                     lead = Lead.objects.create(
                         record=Record.objects.create(owner=request.user),
                         name=row.get("name", ""),
@@ -786,7 +771,7 @@ class LeadViewSet(viewsets.ModelViewSet):
                         status=status_value,
                         notes=row.get("notes", ""),
                     )
-                    history(lead.record, request.user, "lead_imported", {"batch_id": batch_id, "row": row_number, "operation": "create"})
+                    history(lead.record, request.user, "lead_captured", {"source": source.name if source else None, "import_batch": batch_id, "row": row_number})
                     created_count += 1
                     outcome_rows.append({"row": row_number, "result": "created", "record_type": "lead", "record_id": lead.id})
 
@@ -1067,6 +1052,10 @@ class UserViewSet(viewsets.ViewSet):
 
         if not email:
             return Response({"email": "Email is required."}, status=400)
+        try:
+            validate_email(email)
+        except DjangoValidationError:
+            return Response({"email": "Enter a valid email address."}, status=400)
         if not first_name:
             return Response({"first_name": "First name is required."}, status=400)
         if not role_key:
@@ -1130,6 +1119,10 @@ class UserViewSet(viewsets.ViewSet):
             email = str(data.get("email", "")).strip().lower()
             if not email:
                 return Response({"email": "Email is required."}, status=400)
+            try:
+                validate_email(email)
+            except DjangoValidationError:
+                return Response({"email": "Enter a valid email address."}, status=400)
             if User.objects.filter(email__iexact=email).exclude(pk=user.pk).exists():
                 return Response({"email": "A user with this email already exists."}, status=400)
             user.email = email
@@ -1263,19 +1256,43 @@ class ContactViewSet(viewsets.ModelViewSet):
             new_owner = User.objects.filter(pk=owner_id, is_active=True).first()
             if not new_owner:
                 return Response({"owner": "Owner must be an active user."}, status=400)
+        before = self.get_serializer(contact).data
         serializer = self.get_serializer(contact, data=payload, partial=partial)
         serializer.is_valid(raise_exception=True)
         updated = serializer.save()
         if new_owner:
+            old_owner = contact.record.owner_id
             updated.record.owner = new_owner
             updated.record.save(update_fields=["owner"])
-        history(updated.record, request.user, "contact_updated")
-        audit(request.user, "contact.updated", updated, after=self.get_serializer(updated).data)
-        return Response(self.get_serializer(updated).data)
+            history(
+                updated.record,
+                request.user,
+                "reassigned",
+                {
+                    "from_owner": (User.objects.filter(pk=old_owner).first().get_full_name() if User.objects.filter(pk=old_owner).first() else str(old_owner)),
+                    "to_owner": new_owner.get_full_name() or new_owner.username,
+                },
+            )
+        after = self.get_serializer(updated).data
+        changed = _history_changes(
+            before,
+            after,
+            ("name", "company", "email", "phone", "source", "product", "learning_mode", "course_duration", "town_city", "status", "disqualification_reason", "notes", "industry", "location"),
+        )
+        if changed:
+            history(updated.record, request.user, "edited", {"changed": changed})
+        audit(request.user, "contact.updated", updated, before=before, after=after)
+        return Response(after)
 
+    @transaction.atomic
     def destroy(self, request, *args, **kwargs):
         require_permission(request, "delete_contact")
-        return super().destroy(request, *args, **kwargs)
+        contact = self.get_object()
+        record = contact.record
+        response = super().destroy(request, *args, **kwargs)
+        if response.status_code == status.HTTP_204_NO_CONTENT:
+            history(record, request.user, "deleted", {"entity": "Contact", "name": contact.name, "company": contact.company})
+        return response
 
     def get_queryset(self):
         return Contact.objects.filter(record__in=visible_records(self.request.user), deleted_at__isnull=True).select_related("record__owner", "source", "product", "learning_mode", "course_duration")
@@ -1302,7 +1319,6 @@ class ContactViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=payload)
         serializer.is_valid(raise_exception=True)
         contact = serializer.save(record=Record.objects.create(owner=owner))
-        history(contact.record, request.user, "contact_created_directly", {"owner_id": owner.id})
         audit(request.user, "contact.created", contact, after=serializer.data)
         return Response(self.get_serializer(contact).data, status=201)
     @action(detail=True, methods=["get", "post"])
@@ -1310,17 +1326,42 @@ class ContactViewSet(viewsets.ModelViewSet):
         contact = self.get_object(); assert_visible(request.user, contact.record)
         if request.method == "GET":
             require_permission(request, "view_activity")
-            return Response(ActivitySerializer(contact.record.activities.order_by("-happened_at"), many=True).data)
+            activities = contact.record.activities.select_related("author", "deal").order_by("-happened_at", "-id")
+
+            try:
+                page_size = int(request.query_params.get("page_size", 20))
+            except (TypeError, ValueError):
+                page_size = 20
+            page_size = min(max(page_size, 1), 50)
+
+            try:
+                page_number = int(request.query_params.get("page", 1))
+            except (TypeError, ValueError):
+                page_number = 1
+            page_number = max(page_number, 1)
+
+            paginator = Paginator(activities, page_size)
+            page = paginator.get_page(page_number)
+
+            return Response({
+                "count": paginator.count,
+                "page": page.number,
+                "page_size": page_size,
+                "next": page.next_page_number() if page.has_next() else None,
+                "previous": page.previous_page_number() if page.has_previous() else None,
+                "results": ActivitySerializer(page.object_list, many=True, context={"request": request}).data,
+            })
         if not request.user.has_crm_permission("log_activity"): return Response(status=403)
         serializer = ActivitySerializer(data=request.data); serializer.is_valid(raise_exception=True)
         activity = serializer.save(record=contact.record, author=request.user)
         if not contact.record.last_contact_at or activity.happened_at > contact.record.last_contact_at:
             contact.record.last_contact_at = activity.happened_at; contact.record.save(update_fields=["last_contact_at"])
-        return Response(ActivitySerializer(activity).data, status=201)
+        return Response(ActivitySerializer(activity, context={"request": request}).data, status=201)
     @action(detail=True, methods=["get"])
     def history(self, request, pk=None):
-        require_permission(request, "view_history")
-        contact = self.get_object(); assert_visible(request.user, contact.record)
+        contact = self.get_object()
+        if not can_read_record_history(request.user, contact.record):
+            return Response(status=status.HTTP_403_FORBIDDEN)
         return Response(HistorySerializer(contact.record.history.all(), many=True).data)
     @action(detail=True, methods=["post"])
     def deals(self, request, pk=None):
@@ -1334,36 +1375,104 @@ class ContactViewSet(viewsets.ModelViewSet):
 
 class DealViewSet(viewsets.ModelViewSet):
     serializer_class = DealSerializer
-    def create(self, request, *args, **kwargs): return Response({"detail": "Deals can only be created from a contact."}, status=405)
-    def retrieve(self, request, *args, **kwargs): require_permission(request, "view_deals"); return super().retrieve(request, *args, **kwargs)
-    def update(self, request, *args, **kwargs): require_permission(request, "edit_deal"); return super().update(request, *args, **kwargs)
-    def destroy(self, request, *args, **kwargs): require_permission(request, "delete_deal"); return super().destroy(request, *args, **kwargs)
-    def get_queryset(self): return Deal.objects.filter(record__in=visible_records(self.request.user)).select_related("record__owner", "product")
-    def list(self, request, *args, **kwargs):
-        if not request.user.has_crm_permission("view_deals"): return Response(status=403)
-        return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        return Response({"detail": "Deals can only be created from a contact."}, status=405)
+
+    def retrieve(self, request, *args, **kwargs):
+        require_permission(request, "view_deals")
+        return super().retrieve(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        require_permission(request, "edit_deal")
+        return self._update_deal(request, *args, partial=False, **kwargs)
+
     def partial_update(self, request, *args, **kwargs):
+        require_permission(request, "edit_deal")
+        return self._update_deal(request, *args, partial=True, **kwargs)
+
+    def _update_deal(self, request, *args, partial=False, **kwargs):
         deal = self.get_object()
-        if not request.user.has_crm_permission("edit_deal"): return Response(status=403)
+        before = self.get_serializer(deal).data
         if "value_minor" in request.data:
-            if deal.stage in (Deal.Stage.WON, Deal.Stage.LOST): return Response({"detail": "The value is locked because this deal is closed."}, status=400)
-            if not request.user.has_crm_permission("edit_deal_value"): return Response(status=403)
-            old_value = deal.value_minor
-            response = super().partial_update(request, *args, **kwargs)
-            history(deal.record, request.user, "deal_value_updated", {"from": old_value, "to": int(request.data["value_minor"]), "stage": deal.stage})
-            return response
-        return super().partial_update(request, *args, **kwargs)
+            if deal.stage in (Deal.Stage.WON, Deal.Stage.LOST):
+                return Response({"detail": "The value is locked because this deal is closed."}, status=400)
+            if not request.user.has_crm_permission("edit_deal_value"):
+                return Response(status=403)
+        serializer = self.get_serializer(deal, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        updated = serializer.save()
+        after = self.get_serializer(updated).data
+        if before.get("value_minor") != after.get("value_minor"):
+            history(
+                updated.record,
+                request.user,
+                "deal_value_updated",
+                {
+                    "from_value_minor": before.get("value_minor"),
+                    "to_value_minor": after.get("value_minor"),
+                },
+            )
+        changed = _history_changes(
+            before,
+            after,
+            ("product", "expected_close_date", "loss_reason", "notes"),
+        )
+        if changed:
+            history(updated.record, request.user, "edited", {"changed": changed})
+        return Response(after)
+
+    def destroy(self, request, *args, **kwargs):
+        require_permission(request, "delete_deal")
+        deal = self.get_object()
+        record = deal.record
+        response = super().destroy(request, *args, **kwargs)
+        if response.status_code == status.HTTP_204_NO_CONTENT:
+            history(record, request.user, "deleted", {"entity": "Deal", "product": deal.product.name})
+        return response
+
+    def get_queryset(self):
+        return (
+            Deal.objects
+            .filter(record__in=visible_records(self.request.user))
+            .select_related("record__owner", "product")
+            .order_by("-created_at", "-id")
+        )
+
+    def list(self, request, *args, **kwargs):
+        if not request.user.has_crm_permission("view_deals"):
+            return Response(status=403)
+        return super().list(request, *args, **kwargs)
+
     @action(detail=True, methods=["post"])
     def move(self, request, pk=None):
-        deal = self.get_object(); stage = request.data.get("stage")
+        deal = self.get_object()
+        stage = request.data.get("stage")
         closed = {Deal.Stage.WON, Deal.Stage.LOST}
         needed = "close_won" if stage == Deal.Stage.WON else "close_lost" if stage == Deal.Stage.LOST else "move_deal"
-        if not request.user.has_crm_permission(needed): return Response(status=403)
-        if stage not in Deal.Stage.values: return Response({"stage": "Invalid pipeline stage."}, status=400)
-        if stage == Deal.Stage.LOST and not request.data.get("loss_reason"): return Response({"loss_reason": "A loss reason is required."}, status=400)
-        old = deal.stage; deal.stage = stage; deal.loss_reason = request.data.get("loss_reason", deal.loss_reason)
-        deal.closed_at = timezone.now() if stage in closed else None; deal.save()
-        history(deal.record, request.user, "deal_stage_changed", {"from": old, "to": stage, "value_minor": deal.value_minor})
+        if not request.user.has_crm_permission(needed):
+            return Response(status=403)
+        if stage not in Deal.Stage.values:
+            return Response({"stage": "Invalid pipeline stage."}, status=400)
+        if stage == Deal.Stage.LOST and not request.data.get("loss_reason"):
+            return Response({"loss_reason": "A loss reason is required."}, status=400)
+        old = deal.stage
+        deal.stage = stage
+        deal.loss_reason = request.data.get("loss_reason", deal.loss_reason)
+        deal.closed_at = timezone.now() if stage in closed else None
+        deal.save()
+        if old != stage:
+            detail = {
+                "from_stage": old,
+                "to_stage": stage,
+                "value_minor": deal.value_minor,
+                "loss_reason": deal.loss_reason if stage == Deal.Stage.LOST else None,
+            }
+            history(deal.record, request.user, "deal_stage_changed", detail)
+            if stage == Deal.Stage.WON:
+                history(deal.record, request.user, "deal_won", detail)
+            elif stage == Deal.Stage.LOST:
+                history(deal.record, request.user, "deal_lost", detail)
         return Response(DealSerializer(deal).data)
 
 
@@ -1535,6 +1644,24 @@ class SourceViewSet(viewsets.ModelViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+class NotificationViewSet(viewsets.ViewSet):
+    """Authenticated user's own in-app notifications."""
+
+    def list(self, request):
+        notifications = Notification.objects.filter(
+            user=request.user
+        ).order_by("-created_at", "-id")[:50]
+        return Response(NotificationSerializer(notifications, many=True).data)
+
+    @action(detail=False, methods=["post"], url_path="mark-all-read")
+    def mark_all_read(self, request):
+        updated = Notification.objects.filter(
+            user=request.user,
+            read_at__isnull=True,
+        ).update(read_at=timezone.now())
+        return Response({"updated": updated})
+
+
 class RecordViewSet(viewsets.ViewSet):
     """Read/write the one shared timeline for a lead, contact, or deal."""
     def get_record(self, request, pk):
@@ -1544,7 +1671,31 @@ class RecordViewSet(viewsets.ViewSet):
         record = self.get_record(request, pk)
         if request.method == "GET":
             require_permission(request, "view_activity")
-            return Response(ActivitySerializer(record.activities.order_by("-happened_at"), many=True).data)
+            activities = record.activities.select_related("author", "deal").order_by("-happened_at", "-id")
+
+            try:
+                page_size = int(request.query_params.get("page_size", 20))
+            except (TypeError, ValueError):
+                page_size = 20
+            page_size = min(max(page_size, 1), 50)
+
+            try:
+                page_number = int(request.query_params.get("page", 1))
+            except (TypeError, ValueError):
+                page_number = 1
+            page_number = max(page_number, 1)
+
+            paginator = Paginator(activities, page_size)
+            page = paginator.get_page(page_number)
+
+            return Response({
+                "count": paginator.count,
+                "page": page.number,
+                "page_size": page_size,
+                "next": page.next_page_number() if page.has_next() else None,
+                "previous": page.previous_page_number() if page.has_previous() else None,
+                "results": ActivitySerializer(page.object_list, many=True, context={"request": request}).data,
+            })
         if not request.user.has_crm_permission("log_activity"): return Response(status=403)
         serializer = ActivitySerializer(data=request.data); serializer.is_valid(raise_exception=True)
         deal_id = request.data.get("deal")
@@ -1553,11 +1704,92 @@ class RecordViewSet(viewsets.ViewSet):
         if not record.last_contact_at or activity.happened_at > record.last_contact_at:
             record.last_contact_at = activity.happened_at; record.save(update_fields=["last_contact_at"])
         audit(request.user, "activity.created", activity, after={"type": activity.type, "subject": activity.subject})
-        return Response(ActivitySerializer(activity).data, status=201)
+        return Response(ActivitySerializer(activity, context={"request": request}).data, status=201)
+    def _get_activity_for_record(self, request, record, activity_id):
+        try:
+            activity = record.activities.select_related("author", "deal", "voided_by").get(pk=activity_id)
+        except Activity.DoesNotExist:
+            return None
+        return activity
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path=r"activities/(?P<activity_id>[^/.]+)/edit",
+    )
+    def edit_activity(self, request, pk=None, activity_id=None):
+        record = self.get_record(request, pk)
+        require_permission(request, "correct_activity")
+        activity = self._get_activity_for_record(request, record, activity_id)
+        if activity is None:
+            return Response({"detail": "Activity not found."}, status=status.HTTP_404_NOT_FOUND)
+        if activity.voided_at:
+            return Response({"detail": "A voided activity cannot be edited."}, status=status.HTTP_400_BAD_REQUEST)
+        if activity.author_id != request.user.id:
+            return Response({"detail": "Only the activity author can edit this activity."}, status=status.HTTP_403_FORBIDDEN)
+        window = timedelta(hours=max(settings.ACTIVITY_CORRECTION_WINDOW_HOURS, 0))
+        if timezone.now() > activity.created_at + window:
+            return Response({"detail": "The correction window for this activity has expired."}, status=status.HTTP_400_BAD_REQUEST)
+
+        subject = request.data.get("subject", activity.subject)
+        description = request.data.get("description", activity.description)
+        if not isinstance(subject, str) or not subject.strip():
+            return Response({"subject": "Subject is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if activity.original_subject is None:
+            activity.original_subject = activity.subject
+        if activity.original_description is None:
+            activity.original_description = activity.description
+        activity.subject = subject.strip()
+        activity.description = description if isinstance(description, str) else activity.description
+        activity.edited_at = timezone.now()
+        activity.save(update_fields=["original_subject", "original_description", "subject", "description", "edited_at"])
+        history(record, request.user, "activity_edited", {
+            "activity_id": activity.id,
+            "original_subject": activity.original_subject,
+            "subject": activity.subject,
+            "edited_at": activity.edited_at.isoformat(),
+        })
+        audit(request.user, "activity.edited", activity, after={"subject": activity.subject, "description": activity.description})
+        return Response(ActivitySerializer(activity, context={"request": request}).data)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"activities/(?P<activity_id>[^/.]+)/void",
+    )
+    def void_activity(self, request, pk=None, activity_id=None):
+        record = self.get_record(request, pk)
+        require_permission(request, "correct_activity")
+        activity = self._get_activity_for_record(request, record, activity_id)
+        if activity is None:
+            return Response({"detail": "Activity not found."}, status=status.HTTP_404_NOT_FOUND)
+        if activity.voided_at:
+            return Response({"detail": "Activity is already voided."}, status=status.HTTP_400_BAD_REQUEST)
+        is_admin = request.user.is_superuser or getattr(getattr(request.user, "role", None), "key", None) == "admin"
+        if activity.author_id != request.user.id and not is_admin:
+            return Response({"detail": "Only the activity author or an Admin can void this activity."}, status=status.HTTP_403_FORBIDDEN)
+        reason = request.data.get("reason", "")
+        if not isinstance(reason, str) or not reason.strip():
+            return Response({"reason": "A void reason is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        activity.void_reason = reason.strip()
+        activity.voided_at = timezone.now()
+        activity.voided_by = request.user
+        activity.save(update_fields=["void_reason", "voided_at", "voided_by"])
+        history(record, request.user, "activity_voided", {
+            "activity_id": activity.id,
+            "reason": activity.void_reason,
+            "voided_at": activity.voided_at.isoformat(),
+        })
+        audit(request.user, "activity.voided", activity, after={"reason": activity.void_reason})
+        return Response(ActivitySerializer(activity, context={"request": request}).data)
+
     @action(detail=True, methods=["get"])
     def history(self, request, pk=None):
-        require_permission(request, "view_history")
         record = self.get_record(request, pk)
+        if not can_read_record_history(request.user, record):
+            return Response(status=status.HTTP_403_FORBIDDEN)
         return Response(HistorySerializer(record.history.all(), many=True).data)
 
 
@@ -1578,7 +1810,6 @@ class TaskViewSet(viewsets.ModelViewSet):
         record = serializer.validated_data.get("record")
         if record: assert_visible(request.user, record)
         task = serializer.save(creator=request.user, assignee=serializer.validated_data.get("assignee") or request.user)
-        if task.record: history(task.record, request.user, "task_created", {"title": task.title, "due_at": task.due_at.isoformat()})
         audit(request.user, "task.created", task, after={"title": task.title})
         return Response(self.get_serializer(task).data, status=201)
     @action(detail=True, methods=["post"])
@@ -1586,7 +1817,6 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = self.get_object()
         if task.assignee_id != request.user.id and not request.user.has_crm_permission("complete_others_task"): return Response(status=403)
         task.completed_at = None if task.completed_at else timezone.now(); task.completed_by = request.user if task.completed_at else None; task.save(update_fields=["completed_at", "completed_by"])
-        if task.record: history(task.record, request.user, "task_completed" if task.completed_at else "task_reopened", {"title": task.title})
         audit(request.user, "task.completed" if task.completed_at else "task.reopened", task)
         return Response(self.get_serializer(task).data)
 

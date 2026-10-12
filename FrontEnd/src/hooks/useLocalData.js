@@ -54,6 +54,53 @@ function unwrapResults(response) {
   return response?.results ?? response ?? []
 }
 
+function normalizeActivityType(type) {
+  const key = String(type ?? '').toLowerCase().replace('_', '-')
+  return {
+    call: 'Call',
+    email: 'Email',
+    meeting: 'Meeting',
+    note: 'Note',
+    'follow-up': 'Follow-up',
+  }[key] ?? type
+}
+
+/**
+ * Load every page for resources that must be represented completely in the
+ * client-side CRM state. The backend keeps normal pagination at 25 rows;
+ * following the `next` links avoids silently dropping records from counts
+ * and the Kanban board.
+ */
+async function loadAllPages(loadFirstPage) {
+  const firstPage = await loadFirstPage()
+  const items = [...unwrapResults(firstPage)]
+  let next = firstPage?.next ?? null
+
+  while (next) {
+    const nextUrl = new URL(next)
+    const response = await api(`/deals/${nextUrl.search}`)
+    items.push(...unwrapResults(response))
+    next = response?.next ?? null
+  }
+
+  return items
+}
+
+async function loadAllContactPages(loadFirstPage) {
+  const firstPage = await loadFirstPage()
+  const items = [...unwrapResults(firstPage)]
+  let next = firstPage?.next ?? null
+
+  while (next) {
+    const nextUrl = new URL(next)
+    const response = await api(`/contacts/${nextUrl.search}`)
+    items.push(...unwrapResults(response))
+    next = response?.next ?? null
+  }
+
+  return items
+}
+
 function normalizeProduct(item) {
   return {
     id: item.id,
@@ -193,6 +240,7 @@ export function useLocalData(currentUser) {
   const [tasks, setTasks] = useState([])
   const [activities, setActivities] = useState([])
   const [activityLog, setActivityLog] = useState({})
+  const [activityPagination, setActivityPagination] = useState({})
   const [auditLog, setAuditLog] = useState({})
   const [users, setUsers] = useState([])
   const [sources, setSources] = useState([])
@@ -317,8 +365,8 @@ export function useLocalData(currentUser) {
       userPage,
     ] = await Promise.all([
       crmApi.leads(),
-      crmApi.contacts(),
-      crmApi.deals(),
+      loadAllContactPages(() => crmApi.contacts()),
+      loadAllPages(() => crmApi.deals()),
       crmApi.tasks(),
       crmApi.users(),
     ])
@@ -351,8 +399,8 @@ export function useLocalData(currentUser) {
         town_city: item.town_city ?? '',
         status: item.status === 'qualified' ? 'Qualified' : item.status === 'not_qualified' ? 'Not Qualified' : (item.status ?? ''),
         disqualification_reason: item.disqualification_reason ?? '',
-        movedAt: item.became_contact_at?.slice(0, 10),
-        lastContact: null,
+        movedAt: item.became_contact_at ?? null,
+        lastContact: item.last_contact_at ?? null,
         notes: item.notes ?? '',
       }))
 
@@ -386,10 +434,12 @@ export function useLocalData(currentUser) {
           recordId:
             item.record,
           name: `${item.product_name} — ${
+            contact?.name ??
             contact?.company ??
             'Contact'
           }`,
           contact:
+            contact?.name ??
             contact?.company ??
             'Contact',
           product:
@@ -405,6 +455,11 @@ export function useLocalData(currentUser) {
             item.owner_name,
           createdAt:
             item.created_at?.slice(
+              0,
+              10,
+            ),
+          closedAt:
+            item.closed_at?.slice(
               0,
               10,
             ),
@@ -819,31 +874,33 @@ export function useLocalData(currentUser) {
 
   const loadLeadTimeline =
     useCallback(
-      async (recordId) => {
+      async (recordId, page = 1) => {
         if (!recordId) {
           return {
             activities: [],
             history: [],
+            activityMeta: { count: 0, page: 1, pageSize: 20, nextPage: null },
           }
         }
 
-        const [
-          activityRows,
-          historyRows,
-        ] = await Promise.all([
-          api(
-            `/records/${recordId}/activities/`,
-          ),
-          api(
-            `/records/${recordId}/history/`,
-          ),
+        const activityRequest = api(
+          `/records/${recordId}/activities/?page=${page}&page_size=20`,
+        )
+        const historyRequest = page === 1
+          ? api(`/records/${recordId}/history/`)
+          : Promise.resolve(null)
+
+        const [activityResponse, historyRows] = await Promise.all([
+          activityRequest,
+          historyRequest,
         ])
 
+        const activityRows = unwrapResults(activityResponse)
         const activityItems =
-          (activityRows ?? []).map(
+          activityRows.map(
             (item) => ({
               id: item.id,
-              type: item.type,
+              type: normalizeActivityType(item.type),
               title:
                 item.subject,
               detail:
@@ -852,26 +909,61 @@ export function useLocalData(currentUser) {
                 item.author_name,
               timestamp:
                 item.happened_at,
+              deal:
+                item.deal_name ?? '',
+              authorId:
+                item.author_id ?? null,
+              edited:
+                Boolean(item.edited),
+              editedAt:
+                item.edited_at ?? null,
+              originalSubject:
+                item.original_subject ?? null,
+              originalDescription:
+                item.original_description ?? null,
+              voided:
+                Boolean(item.voided),
+              voidReason:
+                item.void_reason ?? '',
+              voidedAt:
+                item.voided_at ?? null,
+              voidedBy:
+                item.voided_by_name ?? '',
+              canEdit:
+                Boolean(item.can_edit),
+              canVoid:
+                Boolean(item.can_void),
             }),
           )
+
+        const previousActivities =
+          page > 1 ? (activityLog[recordId] ?? []) : []
+        const mergedActivities = [
+          ...previousActivities,
+          ...activityItems,
+        ].filter((item, index, all) =>
+          all.findIndex((candidate) => candidate.id === item.id) === index
+        ).sort(byNewest)
+
+        const activityMeta = {
+          count: activityResponse?.count ?? mergedActivities.length,
+          page: activityResponse?.page ?? page,
+          pageSize: activityResponse?.page_size ?? 20,
+          nextPage: activityResponse?.next ?? null,
+        }
 
         const historyItems =
           (historyRows ?? []).map(
             (item) => ({
               id: item.id,
+              type: item.action,
               title:
-                item.action.replaceAll(
-                  '_',
-                  ' ',
-                ),
+                item.action_label ||
+                item.action.replaceAll('_', ' '),
               detail:
-                item.detail
-                  ? JSON.stringify(
-                      item.detail,
-                    )
-                  : '',
+                item.detail_text || '',
               actor:
-                item.actor_name,
+                item.actor_name || 'System',
               timestamp:
                 item.created_at,
             }),
@@ -880,27 +972,33 @@ export function useLocalData(currentUser) {
         setActivityLog(
           (current) => ({
             ...current,
-            [recordId]:
-              activityItems,
+            [recordId]: mergedActivities,
           }),
         )
 
-        setAuditLog(
+        setActivityPagination(
           (current) => ({
             ...current,
-            [recordId]:
-              historyItems,
+            [recordId]: activityMeta,
           }),
         )
 
+        if (page === 1) {
+          setAuditLog(
+            (current) => ({
+              ...current,
+              [recordId]: historyItems,
+            }),
+          )
+        }
+
         return {
-          activities:
-            activityItems,
-          history:
-            historyItems,
+          activities: mergedActivities,
+          history: page === 1 ? historyItems : (auditLog[recordId] ?? []),
+          activityMeta,
         }
       },
-      [],
+      [activityLog, auditLog],
     )
 
   /** Push an entry onto the global feed shown on the Dashboard. */
@@ -923,38 +1021,6 @@ export function useLocalData(currentUser) {
         )
       },
       [currentUser],
-    )
-
-  /**
-   * Record a system event against a record.
-   */
-  const audit =
-    useCallback(
-      (recordId, entry) => {
-        if (!recordId) return
-
-        setAuditLog(
-          (current) => ({
-            ...current,
-            [recordId]: [
-              {
-                id: nextId(
-                  'au',
-                ),
-                timestamp:
-                  nowIso(),
-                ...entry,
-              },
-              ...(current[
-                recordId
-              ] ?? []),
-            ].sort(
-              byNewest,
-            ),
-          }),
-        )
-      },
-      [],
     )
 
   // ---------------------------------------------------------------------------
@@ -1392,6 +1458,8 @@ export function useLocalData(currentUser) {
               owner:
                 response.contact
                   .owner_name,
+              activityCount:
+                response.activity_count ?? 0,
             }
           : null
       },
@@ -1533,11 +1601,16 @@ export function useLocalData(currentUser) {
           console.error('Deal was created, but CRM refresh failed:', refreshError)
         }
 
+        const contactDisplayName =
+          contact.company?.trim() ||
+          contact.name?.trim() ||
+          'Contact'
+
         const deal = {
           id: nextId('d'),
-          name: `${values.product} — ${contact.company}`,
+          name: `${values.product} — ${contactDisplayName}`,
           contact:
-            contact.company,
+            contactDisplayName,
           recordId:
             contact.recordId,
           product:
@@ -1582,26 +1655,13 @@ export function useLocalData(currentUser) {
             ),
         )
 
-        audit(
-          contact.recordId,
-          {
-            type: 'Deal created',
-            title:
-              deal.name,
-            detail: `Created at ${ENTRY_STAGE} · ${deal.product} · ${money(deal.value)}.`,
-            deal:
-              deal.name,
-            actor:
-              deal.owner,
-          },
-        )
 
         pushFeed({
           type: 'Deal created',
-          description: `moved ${contact.company} to Deals`,
+          description: `moved ${contactDisplayName} to Deals`,
           detail: `${deal.product} · ${money(deal.value)} · created at ${ENTRY_STAGE}.`,
           company:
-            contact.company,
+            contactDisplayName,
         })
 
         try {
@@ -1618,7 +1678,6 @@ export function useLocalData(currentUser) {
         }
       },
       [
-        audit,
         pushFeed,
         refreshCrm,
         products,
@@ -1670,26 +1729,9 @@ export function useLocalData(currentUser) {
         )
 
         if (target) {
-          audit(
-            recordIdForDeal(
-              target,
-            ),
-            {
-              type: 'Record updated',
-              title:
-                `${target.name} edited`,
-              detail: '',
-              deal:
-                target.name,
-              actor:
-                values.owner ??
-                target.owner,
-            },
-          )
         }
       },
       [
-        audit,
         recordIdForDeal,
       ],
     )
@@ -1744,22 +1786,6 @@ export function useLocalData(currentUser) {
             ),
         )
 
-        audit(
-          recordIdForDeal(
-            deal,
-          ),
-          {
-            type: 'Value updated',
-            title:
-              `Value changed on ${deal.name}`,
-            detail:
-              `${money(deal.value)} → ${money(value)} during ${deal.stage}.`,
-            deal:
-              deal.name,
-            actor:
-              deal.owner,
-          },
-        )
 
         pushFeed({
           type: 'Value updated',
@@ -1778,7 +1804,6 @@ export function useLocalData(currentUser) {
       },
       [
         deals,
-        audit,
         pushFeed,
         recordIdForDeal,
       ],
@@ -1790,36 +1815,41 @@ export function useLocalData(currentUser) {
         id,
         stage,
       ) => {
-        let moved = null
-        let from = null
+        const currentDeal =
+          deals.find(
+            (deal) =>
+              String(deal.id) ===
+              String(id),
+          )
 
+        if (
+          !currentDeal ||
+          currentDeal.stage ===
+            stage
+        ) {
+          return currentDeal ?? null
+        }
+
+        const moved = {
+          ...currentDeal,
+          stage,
+        }
+
+        // Update the UI immediately, while using the normalized ID so
+        // string/number ID differences cannot prevent the move.
         setDeals(
           (current) =>
             current.map(
-              (deal) => {
-                if (
-                  deal.id !==
-                    id ||
-                  deal.stage ===
-                    stage
-                ) {
-                  return deal
-                }
-
-                from =
-                  deal.stage
-
-                moved = {
-                  ...deal,
-                  stage,
-                }
-
-                return moved
-              },
+              (deal) =>
+                String(deal.id) ===
+                String(id)
+                  ? moved
+                  : deal,
             ),
         )
 
-        if (moved) {
+        try {
+          // Persist the stage change in the backend.
           await api(
             `/deals/${id}/move/`,
             {
@@ -1840,37 +1870,14 @@ export function useLocalData(currentUser) {
             },
           )
 
+          // Always re-hydrate from the backend after a successful move.
+          // This makes the persisted database state the source of truth.
           await refreshCrm()
 
           const won =
             stage === 'Won'
           const lost =
             stage === 'Lost'
-
-          audit(
-            recordIdForDeal(
-              moved,
-            ),
-            {
-              type: won
-                ? 'Deal won'
-                : lost
-                  ? 'Deal lost'
-                  : 'Stage changed',
-              title:
-                won || lost
-                  ? `${moved.name} marked ${stage}`
-                  : `${moved.name} moved to ${stage}`,
-              detail:
-                won || lost
-                  ? `${money(moved.value)} · value locked.`
-                  : `${from} → ${stage}.`,
-              deal:
-                moved.name,
-              actor:
-                moved.owner,
-            },
-          )
 
           pushFeed({
             type: won
@@ -1885,14 +1892,18 @@ export function useLocalData(currentUser) {
             company:
               moved.contact,
           })
-        }
 
-        return moved
+          return moved
+        } catch (error) {
+          // If persistence fails, restore the UI from the backend instead
+          // of leaving an optimistic stage that disappears later.
+          await refreshCrm()
+          throw error
+        }
       },
       [
-        audit,
+        deals,
         pushFeed,
-        recordIdForDeal,
         refreshCrm,
       ],
     )
@@ -2077,14 +2088,12 @@ export function useLocalData(currentUser) {
   // Derived figures
   // ---------------------------------------------------------------------------
 
+  // A deal belongs to the shared CRM record, not to a company/name string.
   const companiesWithDeals =
     useMemo(
       () =>
         new Set(
-          deals.map(
-            (deal) =>
-              deal.contact,
-          ),
+          deals.map((deal) => deal.recordId).filter(Boolean),
         ),
       [deals],
     )
@@ -2130,7 +2139,7 @@ export function useLocalData(currentUser) {
         contacts.filter(
           (contact) =>
             !companiesWithDeals.has(
-              contact.company,
+              contact.recordId,
             ),
         ).length
 
@@ -2233,6 +2242,7 @@ export function useLocalData(currentUser) {
 
     activities,
     activityLog,
+    activityPagination,
     auditLog,
     companiesWithDeals,
 

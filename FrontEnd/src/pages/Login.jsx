@@ -119,8 +119,15 @@ export default function Login({ onAuthenticated }) {
           )
         }
 
+        // Accept a 10-digit Indian mobile number at sign-in and normalize it
+        // to the +91 format used by existing user records.
+        const rawIdentifier = identifier.trim()
+        const loginIdentifier = /^\d{10}$/.test(rawIdentifier)
+          ? `+91${rawIdentifier}`
+          : rawIdentifier
+
         const user = await crmApi.login(
-          identifier.trim(),
+          loginIdentifier,
           password,
         )
 
@@ -651,7 +658,7 @@ export default function Login({ onAuthenticated }) {
               placeholder={
                 mode === 'request'
                   ? 'name@gmail.com'
-                  : 'name@gmail.com or +91 9876543210'
+                  : 'name@gmail.com or 9876543210'
               }
               autoComplete={
                 mode === 'request'

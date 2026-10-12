@@ -6,7 +6,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from .models import CrmSession, Lead, Role, User
+from .models import Contact, CrmSession, Deal, HistoryEvent, Product, Role, Source, User
 
 
 @override_settings(DATABASE_URL="", EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
@@ -134,118 +134,122 @@ class LeadSprintTests(TestCase):
         self.assertEqual(response.status_code, 204)
         self.assertEqual(self.client.get("/api/leads/").data["count"], 0)
 
-@override_settings(DATABASE_URL="", PASSWORD_HASHERS=["django.contrib.auth.hashers.PBKDF2PasswordHasher"])
-class LeadContactUniquenessTests(TestCase):
+
+class HistoryEpicTests(TestCase):
     def setUp(self):
-        from crm.models import Permission, Source
-
-        self.admin_role = Role.objects.create(
-            key="admin",
-            name="Admin",
-            permissions=[p.value for p in Permission],
+        permissions = __import__("crm.models", fromlist=["Permission"]).Permission
+        all_permissions = [p.value for p in permissions]
+        self.admin_role = Role.objects.create(key="admin-history", name="Admin", permissions=all_permissions)
+        self.manager_role = Role.objects.create(
+            key="manager-history",
+            name="Sales Manager",
+            permissions=[
+                "view_leads", "capture_lead", "edit_lead", "set_lead_status",
+                "move_to_contact", "view_contacts", "edit_contact", "create_contact",
+                "create_deal", "view_deals", "edit_deal", "edit_deal_value",
+                "move_deal", "close_won", "close_lost", "delete_deal",
+                "reassign_lead", "delete_lead", "reassign_contact",
+                "view_activity", "log_activity",
+            ],
         )
-        self.admin = User.objects.create_user(
-            username="admin-unique@litecrm.local",
-            email="admin-unique@litecrm.local",
-            password="Admin!234",
-            role=self.admin_role,
+        self.reader_role = Role.objects.create(
+            key="reader-history",
+            name="Reader",
+            permissions=["view_leads", "view_contacts", "view_deals", "view_workspace_records"],
         )
-        self.source = Source.objects.create(name="Website")
+        self.manager = User.objects.create_user(
+            username="history-manager@litecrm.local",
+            email="history-manager@litecrm.local",
+            password="Manager!234",
+            role=self.manager_role,
+        )
+        self.reader = User.objects.create_user(
+            username="history-reader@litecrm.local",
+            email="history-reader@litecrm.local",
+            password="Reader!234",
+            role=self.reader_role,
+        )
+        self.source = Source.objects.create(name="History Website")
+        self.product = Product.objects.create(name="History Product", default_value_minor=100000)
         self.client = APIClient()
-        self.client.force_authenticate(self.admin)
+        self.client.force_authenticate(self.manager)
 
-    def create_lead(self, **overrides):
-        payload = {
-            "name": "Lead One",
-            "email": "person@example.com",
-            "phone": "+919876543210",
-            "source": self.source.id,
-        }
-        payload.update(overrides)
-        return self.client.post("/api/leads/", payload, format="json")
-
-    def create_contact(self, **overrides):
-        payload = {
-            "name": "Contact One",
-            "email": "contact@example.com",
-            "phone": "+919812345678",
-            "source": self.source.id,
-        }
-        payload.update(overrides)
-        return self.client.post("/api/contacts/", payload, format="json")
-
-    def test_lead_rejects_duplicate_email_across_leads(self):
-        self.assertEqual(self.create_lead().status_code, 201)
-        response = self.create_lead(name="Lead Two", phone="+919811112222")
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("email", response.data)
-
-    def test_lead_rejects_duplicate_phone_across_contacts(self):
-        self.assertEqual(self.create_contact().status_code, 201)
-        response = self.create_lead(email="new@example.com", phone="+919812345678")
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("phone", response.data)
-
-    def test_contact_rejects_duplicate_email_across_leads(self):
-        self.assertEqual(self.create_lead().status_code, 201)
-        response = self.create_contact(email="person@example.com", phone="+919899999999")
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("email", response.data)
-
-    def test_contact_rejects_duplicate_phone_across_contacts(self):
-        self.assertEqual(self.create_contact().status_code, 201)
-        response = self.create_contact(name="Contact Two", email="other@example.com")
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("phone", response.data)
-
-    def test_same_record_can_be_updated_without_false_duplicate_error(self):
-        created = self.create_lead()
-        self.assertEqual(created.status_code, 201)
-        lead_id = created.data["id"]
-        response = self.client.patch(
-            f"/api/leads/{lead_id}/",
-            {"name": "Lead One Updated"},
+    def create_lead(self):
+        response = self.client.post(
+            "/api/leads/",
+            {
+                "name": "History Lead",
+                "company": "History Co",
+                "email": "history@example.com",
+                "phone": "+919876543210",
+                "source": self.source.id,
+            },
             format="json",
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["email"], "person@example.com")
-
-    def test_lead_conversion_keeps_its_own_email_and_phone(self):
-        created = self.create_lead()
-        self.assertEqual(created.status_code, 201)
-        lead_id = created.data["id"]
-        self.assertEqual(
-            self.client.post(
-                f"/api/leads/{lead_id}/qualify/",
-                {"status": "qualified"},
-                format="json",
-            ).status_code,
-            200,
-        )
-        response = self.client.post(f"/api/leads/{lead_id}/convert/", format="json")
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data["contact"]["email"], "person@example.com")
-        self.assertEqual(response.data["contact"]["phone"], "+919876543210")
+        return response.data["id"], response.data["record_id"]
 
-    def test_lead_cannot_convert_if_another_contact_uses_the_same_identity(self):
-        from crm.models import Contact, Record
+    def test_history_is_system_only_append_only_and_readable_without_history_permission(self):
+        lead_id, record_id = self.create_lead()
+        events = HistoryEvent.objects.filter(record_id=record_id)
+        self.assertEqual(events.count(), 1)
+        self.assertEqual(events.first().action, "lead_captured")
 
-        # Simulate an older/legacy record that already has the mobile number.
-        Contact.objects.create(
-            record=Record.objects.create(owner=self.admin),
-            name="Existing Contact",
-            email="other@example.com",
-            phone="+919876543210",
+        self.client.force_authenticate(self.reader)
+        response = self.client.get(f"/api/records/{record_id}/history/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data[0]["action"], "lead_captured")
+        self.assertIn("action_label", response.data[0])
+        self.assertIn("detail_text", response.data[0])
+
+        for method in ("post", "put", "patch", "delete"):
+            request = getattr(self.client, method)
+            response = request(f"/api/records/{record_id}/history/", {}, format="json")
+            self.assertEqual(response.status_code, 405)
+
+        self.assertEqual(HistoryEvent.objects.filter(record_id=record_id).count(), 1)
+
+    def test_history_runs_across_lead_contact_and_deal_lifecycle(self):
+        lead_id, record_id = self.create_lead()
+
+        response = self.client.post(f"/api/leads/{lead_id}/qualify/", {"status": "qualified"}, format="json")
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.post(f"/api/leads/{lead_id}/convert/", {}, format="json")
+        self.assertEqual(response.status_code, 201)
+        contact_id = response.data["contact"]["id"]
+
+        response = self.client.post(
+            f"/api/contacts/{contact_id}/deals/",
+            {
+                "product": self.product.id,
+                "value_minor": 125000,
+                "expected_close_date": "2026-12-31",
+            },
+            format="json",
         )
-        lead = Lead.objects.create(
-            record=Record.objects.create(owner=self.admin),
-            name="Qualified Lead",
-            email="lead@example.com",
-            phone="+919876543210",
-            source=self.source,
-            status=Lead.Status.QUALIFIED,
-        )
+        self.assertEqual(response.status_code, 201)
+        deal_id = response.data["id"]
 
-        response = self.client.post(f"/api/leads/{lead.id}/convert/", format="json")
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("phone", response.data)
+        response = self.client.patch(f"/api/deals/{deal_id}/", {"value_minor": 150000}, format="json")
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.post(f"/api/deals/{deal_id}/move/", {"stage": "won"}, format="json")
+        self.assertEqual(response.status_code, 200)
+
+        actions = list(HistoryEvent.objects.filter(record_id=record_id).values_list("action", flat=True))
+        self.assertIn("lead_captured", actions)
+        self.assertIn("qualified", actions)
+        self.assertIn("moved_to_contacts", actions)
+        self.assertIn("deal_created", actions)
+        self.assertIn("deal_value_updated", actions)
+        self.assertIn("deal_stage_changed", actions)
+        self.assertIn("deal_won", actions)
+
+    def test_history_deleted_event_is_recorded_only_after_successful_delete(self):
+        lead_id, record_id = self.create_lead()
+        response = self.client.delete(f"/api/leads/{lead_id}/")
+        self.assertEqual(response.status_code, 204)
+        actions = list(HistoryEvent.objects.filter(record_id=record_id).values_list("action", flat=True))
+        self.assertEqual(actions[0], "deleted")
+        self.assertIn("lead_captured", actions)

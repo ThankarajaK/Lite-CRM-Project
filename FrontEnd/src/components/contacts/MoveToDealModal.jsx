@@ -36,6 +36,11 @@ function validate(values) {
 export default function MoveToDealModal({ open, onClose, onConfirm, contact }) {
   const { products, users } = useData()
 
+  const contactDisplayName =
+    contact?.company?.trim() ||
+    contact?.name?.trim() ||
+    'Contact'
+
   // Only active products from the Admin-managed catalogue may be selected
   // when creating a Deal. Do not use the old hard-coded mock product list.
   const activeProducts = useMemo(
@@ -156,9 +161,9 @@ export default function MoveToDealModal({ open, onClose, onConfirm, contact }) {
     >
       {/* What is about to happen */}
       <div className="mb-5 flex items-center gap-3 rounded-lg border border-brand-100 bg-brand-50/60 p-3.5">
-        <Avatar name={contact.company} size="md" />
+        <Avatar name={contactDisplayName} size="md" />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-slate-900">{contact.company}</p>
+          <p className="truncate text-sm font-medium text-slate-900">{contactDisplayName}</p>
           <p className="truncate text-xs text-slate-600">{contact.name}</p>
         </div>
         <ArrowRight className="h-4 w-4 shrink-0 text-brand-500" />
@@ -221,7 +226,7 @@ export default function MoveToDealModal({ open, onClose, onConfirm, contact }) {
         <p className="text-xs text-slate-500">
           The deal will be named{' '}
           <span className="font-medium text-slate-700">
-            {form.values.product} — {contact.company}
+            {form.values.product} — {contactDisplayName}
           </span>
           .
         </p>

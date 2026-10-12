@@ -1,6 +1,5 @@
 import { useMemo } from 'react'
 import Card, { CardHeader } from '../ui/Card'
-import { LEAD_SOURCES } from '../../data/mockData'
 
 /** Bar colour per lead source. */
 const SOURCE_COLORS = {
@@ -21,7 +20,8 @@ const SOURCE_COLORS = {
 export default function SourceBreakdown({ records }) {
   const rows = useMemo(() => {
     const total = records.length || 1
-    return LEAD_SOURCES.map((source) => {
+    const sources = [...new Set(records.map((record) => record.source || 'Unspecified'))]
+    return sources.map((source) => {
       const count = records.filter((record) => record.source === source).length
       return { source, count, percent: Math.round((count / total) * 100) }
     }).sort((a, b) => b.count - a.count)

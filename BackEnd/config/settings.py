@@ -7,6 +7,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 
+# Activity correction window (hours).
+ACTIVITY_CORRECTION_WINDOW_HOURS = int(
+    os.getenv("ACTIVITY_CORRECTION_WINDOW_HOURS", "24")
+)
+
+
 # =============================================================================
 # Basic Django Configuration
 # =============================================================================

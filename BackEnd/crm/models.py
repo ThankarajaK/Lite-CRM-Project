@@ -139,6 +139,13 @@ class User(AbstractUser):
         default=False,
     )
 
+    def save(self, *args, **kwargs):
+        if self.is_superuser and self.role_id is None:
+            admin_role = Role.objects.filter(key="admin").first()
+            if admin_role:
+                self.role = admin_role
+        super().save(*args, **kwargs)
+
     def has_crm_permission(self, permission):
         return bool(
             self.role
@@ -633,6 +640,40 @@ class Activity(models.Model):
 
     created_at = models.DateTimeField(
         auto_now_add=True,
+    )
+
+    original_subject = models.CharField(
+        max_length=300,
+        null=True,
+        blank=True,
+    )
+
+    original_description = models.TextField(
+        null=True,
+        blank=True,
+    )
+
+    edited_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    void_reason = models.TextField(
+        null=True,
+        blank=True,
+    )
+
+    voided_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    voided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="voided_activities",
+        null=True,
+        blank=True,
     )
 
 

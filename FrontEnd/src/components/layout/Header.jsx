@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Bell,
@@ -22,8 +22,9 @@ import {
   useEscapeKey,
 } from '../../hooks/useDismissable'
 
-import { notifications as seedNotifications } from '../../data/mockData'
+import { api } from '../../lib/api'
 import { getPageMeta } from './navigation'
+import { useData } from '../../context/DataContext'
 import {
   cn,
   formatRelativeTime,
@@ -34,9 +35,53 @@ import {
    NOTIFICATIONS MENU
    ============================================================ */
 
-function NotificationsMenu() {
+function notificationTitle(eventType) {
+  const titles = {
+    'lead.moved_to_contacts': 'Lead moved to Contacts',
+    'deal.value_changed': 'Deal value changed',
+    'deal.won': 'Deal won',
+    'deal.lost': 'Deal lost',
+    'task.due_today': 'Task due today',
+    'security.account_locked': 'Account security alert',
+  }
+
+  if (titles[eventType]) return titles[eventType]
+
+  return String(eventType || 'Notification')
+    .replace(/[._]/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+async function fetchNotifications(setItems) {
+  try {
+    const response = await api('/notifications/')
+    const results = response?.results ?? response ?? []
+    setItems(results.map((item) => ({
+      id: item.id,
+      title: notificationTitle(item.event_type),
+      body: item.message,
+      timestamp: item.created_at,
+      unread: !item.read_at,
+    })))
+  } catch (error) {
+    // Keep the current list visible if the API temporarily fails.
+    console.error('Unable to load notifications:', error)
+  }
+}
+
+function NotificationsMenu({ user }) {
   const [open, setOpen] = useState(false)
-  const [items, setItems] = useState(seedNotifications)
+  const [items, setItems] = useState([])
+
+  useEffect(() => {
+    fetchNotifications(setItems)
+    const intervalId = window.setInterval(
+      () => fetchNotifications(setItems),
+      30000,
+    )
+
+    return () => window.clearInterval(intervalId)
+  }, [user?.id])
 
   const ref = useClickOutside(
     open,
@@ -52,13 +97,20 @@ function NotificationsMenu() {
     (item) => item.unread
   ).length
 
-  const markAllRead = () => {
-    setItems((current) =>
-      current.map((item) => ({
-        ...item,
-        unread: false,
-      }))
-    )
+  const markAllRead = async () => {
+    try {
+      await api('/notifications/mark-all-read/', {
+        method: 'POST',
+      })
+      setItems((current) =>
+        current.map((item) => ({
+          ...item,
+          unread: false,
+        }))
+      )
+    } catch (error) {
+      console.error('Unable to mark notifications as read:', error)
+    }
   }
 
   return (
@@ -72,9 +124,11 @@ function NotificationsMenu() {
       >
         <button
           type="button"
-          onClick={() =>
-            setOpen((current) => !current)
-          }
+          onClick={() => {
+            const willOpen = !open
+            setOpen(willOpen)
+            if (willOpen) fetchNotifications(setItems)
+          }}
           aria-label={`Notifications${
             unread
               ? `, ${unread} unread`
@@ -410,6 +464,30 @@ function UserMenu({
 }
 
 
+function SearchResults({ results, onSelect }) {
+  return (
+    <div className="absolute right-0 top-full z-[60] mt-2 max-h-96 w-[min(24rem,calc(100vw-1.5rem))] overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-dropdown">
+      {results.length ? results.map((result, index) => (
+        <button
+          key={`${result.type}-${result.path}-${result.title}-${index}`}
+          type="button"
+          onClick={() => onSelect(result)}
+          className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none"
+        >
+          <span className="mt-0.5 rounded-md bg-brand-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-brand-700">{result.type}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium text-slate-900">{result.title}</span>
+            <span className="mt-0.5 block truncate text-xs text-slate-500">{result.detail}</span>
+          </span>
+        </button>
+      )) : (
+        <p className="px-4 py-5 text-center text-sm text-slate-500">No matching records found.</p>
+      )}
+    </div>
+  )
+}
+
+
 /* ============================================================
    HEADER
    ============================================================ */
@@ -439,12 +517,28 @@ export default function Header({
   const { pathname } = useLocation()
 
   const page = getPageMeta(pathname)
+  const navigate = useNavigate()
+  const { leads = [], contacts = [], deals = [], tasks = [] } = useData()
 
   const [searchOpen, setSearchOpen] =
     useState(false)
 
   const [query, setQuery] =
     useState('')
+
+  const searchTerm = query.trim().toLowerCase()
+  const searchResults = searchTerm ? [
+    ...leads.filter((item) => [item.name, item.company, item.email, item.phone].some((v) => String(v ?? '').toLowerCase().includes(searchTerm))).map((item) => ({ type: 'Lead', title: item.name || 'Unnamed lead', detail: item.company || item.email || item.phone || 'Lead', path: `/leads?lead=${encodeURIComponent(item.id)}` })),
+    ...contacts.filter((item) => [item.name, item.company, item.email, item.phone].some((v) => String(v ?? '').toLowerCase().includes(searchTerm))).map((item) => ({ type: 'Contact', title: item.name || 'Unnamed contact', detail: item.company || item.email || item.phone || 'Contact', path: '/contacts' })),
+    ...deals.filter((item) => [item.name, item.contactName, item.company, item.productName, item.stage].some((v) => String(v ?? '').toLowerCase().includes(searchTerm))).map((item) => ({ type: 'Deal', title: item.name || item.contactName || item.productName || 'Deal', detail: [item.productName, item.stage].filter(Boolean).join(' · ') || 'Deal', path: `/deals?deal=${encodeURIComponent(item.id)}` })),
+    ...tasks.filter((item) => [item.title, item.contact, item.notes, item.type].some((v) => String(v ?? '').toLowerCase().includes(searchTerm))).map((item) => ({ type: 'Task', title: item.title || 'Task', detail: item.contact || item.type || 'Task', path: '/tasks' })),
+  ].slice(0, 8) : []
+
+  const openSearchResult = (result) => {
+    navigate(result.path)
+    setQuery('')
+    setSearchOpen(false)
+  }
 
   const toggleMobileSearch = () => {
     setSearchOpen(
@@ -524,13 +618,16 @@ export default function Header({
         <div className="flex shrink-0 items-center gap-0.5 sm:gap-1.5">
 
           {/* Desktop search */}
-          <div className="hidden md:block">
+          <div className="relative hidden md:block">
             <SearchBar
               value={query}
               onChange={setQuery}
               placeholder="Search anything..."
               className="w-52 lg:w-64 xl:w-72"
             />
+            {searchTerm ? (
+              <SearchResults results={searchResults} onSelect={openSearchResult} />
+            ) : null}
           </div>
 
 
@@ -574,7 +671,7 @@ export default function Header({
 
 
           {/* Notifications */}
-          <NotificationsMenu />
+          <NotificationsMenu user={user} />
 
 
           {/* Separator */}
@@ -603,13 +700,18 @@ export default function Header({
             'md:hidden'
           )}
         >
-          <SearchBar
-            value={query}
-            onChange={setQuery}
-            placeholder="Search anything..."
-            className="w-full"
-            autoFocus
-          />
+          <div className="relative">
+            <SearchBar
+              value={query}
+              onChange={setQuery}
+              placeholder="Search anything..."
+              className="w-full"
+              autoFocus
+            />
+            {searchTerm ? (
+              <SearchResults results={searchResults} onSelect={openSearchResult} />
+            ) : null}
+          </div>
         </div>
       ) : null}
     </header>

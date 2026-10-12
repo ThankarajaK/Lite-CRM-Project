@@ -57,8 +57,9 @@ export default function LogActivityModal({
   record,
   deals = [],
   defaultDeal = '',
+  lockedDeal = false,
 }) {
-  const { user, users } = useData()
+  const { user } = useData()
   const initialValues = useMemo(
     () => ({
       type: 'Call',
@@ -68,7 +69,7 @@ export default function LogActivityModal({
       actor: user?.name || '',
       deal: defaultDeal,
     }),
-    [defaultDeal]
+    [defaultDeal, user?.name]
   )
 
   const form = useForm(initialValues, validate)
@@ -85,16 +86,16 @@ export default function LogActivityModal({
 
   if (!record) return null
 
-  const people = users.map((item) => item.display_name)
   // A lead has a status; a contact has a movedAt. Used only for the footnote.
   const isLead = Boolean(record.status === 'Qualified' || record.status === 'Not Qualified')
+  const recordDisplayName = record.name || record.company || 'Contact'
 
   return (
     <Modal
       open={open}
       onClose={onClose}
       title="Log Activity"
-      description={`Record what happened with ${record.company}.`}
+      description={`Record what happened with ${recordDisplayName}.`}
       size="lg"
       footer={
         <>
@@ -165,8 +166,18 @@ export default function LogActivityModal({
             <Input {...form.field('timestamp')} type="datetime-local" />
           </Field>
 
-          <Field label="Logged by" htmlFor="actor">
-            <Select {...form.field('actor')} options={people} />
+          <Field
+            label="Logged by"
+            htmlFor="actor"
+            hint="This is the currently signed-in user and cannot be changed."
+          >
+            <Input
+              id="actor"
+              value={form.values.actor || 'Current user'}
+              readOnly
+              aria-readonly="true"
+              className="bg-slate-50 text-slate-600"
+            />
           </Field>
         </div>
 
@@ -176,23 +187,33 @@ export default function LogActivityModal({
             htmlFor="deal"
             hint="Optional — links this conversation to the opportunity it was about."
           >
-            <Select {...form.field('deal')}>
-              <option value="">No specific deal</option>
-              {deals.map((deal) => (
-                <option key={deal.id} value={deal.name}>
-                  {deal.name} · {deal.stage}
-                </option>
-              ))}
-            </Select>
+            {lockedDeal ? (
+              <Input
+                id="deal"
+                value={form.values.deal || 'Selected deal'}
+                readOnly
+                aria-readonly="true"
+                className="bg-slate-50 text-slate-600"
+              />
+            ) : (
+              <Select {...form.field('deal')}>
+                <option value="">No specific deal</option>
+                {deals.map((deal) => (
+                  <option key={deal.id} value={deal.name}>
+                    {deal.name} · {deal.stage}
+                  </option>
+                ))}
+              </Select>
+            )}
           </Field>
         ) : null}
 
         {/* Who this is being logged against */}
         <div className="flex items-center gap-2.5 rounded-lg bg-slate-50 px-3.5 py-3">
-          <Avatar name={record.company} size="sm" />
+          <Avatar name={recordDisplayName} size="sm" />
           <p className="min-w-0 text-sm text-slate-600">
             Logging against{' '}
-            <span className="font-medium text-slate-900">{record.company}</span>
+            <span className="font-medium text-slate-900">{recordDisplayName}</span>
             {isLead
               ? ' — this stays with the record when the lead moves to Contacts.'
               : ' — this also updates their last contact date.'}
