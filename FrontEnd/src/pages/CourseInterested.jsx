@@ -98,6 +98,7 @@ export default function CourseInterested() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState(null)
+  const [togglingStatusId, setTogglingStatusId] = useState(null)
 
   const [search, setSearch] = useState('')
 
@@ -324,6 +325,39 @@ export default function CourseInterested() {
       )
     } finally {
       setDeletingId(null)
+    }
+  }
+
+
+  // ---------------------------------------------------------------------------
+  // Activate / deactivate product
+  // ---------------------------------------------------------------------------
+
+  async function toggleProductStatus(product) {
+    const nextActive = product.active === false
+
+    const action = nextActive ? 'activate' : 'deactivate'
+    const confirmed = window.confirm(
+      `${nextActive ? 'Activate' : 'Deactivate'} "${product.name}"? ${nextActive ? 'It will be available for new deals again.' : 'It will no longer be available for new deals. Existing deals will remain unchanged.'}`
+    )
+
+    if (!confirmed) return
+
+    setTogglingStatusId(product.id)
+    try {
+      await crmApi.updateProduct(product.id, { active: nextActive })
+      toast.success(
+        `Product ${nextActive ? 'activated' : 'deactivated'}`,
+        `${product.name} was ${nextActive ? 'activated' : 'deactivated'} successfully.`,
+      )
+      await loadProducts()
+    } catch (error) {
+      toast.error(
+        `Product ${action} failed`,
+        error?.message || `Unable to ${action} this product.`,
+      )
+    } finally {
+      setTogglingStatusId(null)
     }
   }
 
@@ -759,6 +793,23 @@ export default function CourseInterested() {
                             >
                               <Pencil className="mr-1 h-3.5 w-3.5" />
                               Edit
+                            </Button>
+
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => toggleProductStatus(product)}
+                              disabled={
+                                deletingId === product.id ||
+                                togglingStatusId === product.id
+                              }
+                            >
+                              {togglingStatusId === product.id
+                                ? 'Saving…'
+                                : product.active
+                                  ? 'Deactivate'
+                                  : 'Activate'}
                             </Button>
 
                             <Button

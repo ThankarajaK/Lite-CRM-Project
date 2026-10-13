@@ -10,7 +10,17 @@ function validate(values) {
   return {
     product: validators.required(values.product, 'Product'),
     value: validators.required(values.value, 'Value') ?? validators.positiveNumber(values.value, 'Value'),
-    closeDate: validators.required(values.closeDate, 'Expected close date'),
+    closeDate: !values.closeDate
+      ? 'Expected close date is required.'
+      : values.closeDate < (() => {
+          const today = new Date()
+          const year = today.getFullYear()
+          const month = String(today.getMonth() + 1).padStart(2, '0')
+          const day = String(today.getDate()).padStart(2, '0')
+          return `${year}-${month}-${day}`
+        })()
+        ? 'Expected close date cannot be in the past.'
+        : undefined,
   }
 }
 
@@ -98,7 +108,13 @@ export default function DealFormModal({ open, onClose, onSubmit, deal }) {
           required
           error={form.field('closeDate').error}
         >
-          <Input {...form.field('closeDate')} type="date" />
+          <Input {...form.field('closeDate')} type="date" min={(() => {
+            const today = new Date()
+            const year = today.getFullYear()
+            const month = String(today.getMonth() + 1).padStart(2, '0')
+            const day = String(today.getDate()).padStart(2, '0')
+            return `${year}-${month}-${day}`
+          })()} />
         </Field>
 
         <Field label="Stage" htmlFor="stage">

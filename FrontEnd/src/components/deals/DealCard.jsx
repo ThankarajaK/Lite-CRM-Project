@@ -85,7 +85,7 @@ export default function DealCard({
         />
       </div>
 
-      <div className="mt-2.5 flex items-center justify-between gap-2">
+      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
         <span
           className={cn(
             'inline-flex items-center gap-1 text-xs',
@@ -95,6 +95,11 @@ export default function DealCard({
           <CalendarDays className="h-3.5 w-3.5" />
           Close: {formatShortDate(deal.closeDate)}
         </span>
+        {pastDue && (
+          <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-700 ring-1 ring-inset ring-red-200">
+            Overdue
+          </span>
+        )}
         <span className="flex items-center gap-2">
           {/* How much has been logged with this contact — open the card to read it. */}
           <Tooltip

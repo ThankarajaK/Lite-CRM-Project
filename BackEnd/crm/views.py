@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 import csv
 import io
 import json
@@ -1367,9 +1367,31 @@ class ContactViewSet(viewsets.ModelViewSet):
     def deals(self, request, pk=None):
         if not request.user.has_crm_permission("create_deal"): return Response(status=403)
         contact = self.get_object(); assert_visible(request.user, contact.record)
+        # Enforce the date rule at the contact-to-deal endpoint itself, before
+        # serializer processing, so a past date cannot slip through this path.
+        raw_close_date = request.data.get("expected_close_date")
+        if raw_close_date:
+            try:
+                submitted_close_date = date.fromisoformat(str(raw_close_date)[:10])
+            except (TypeError, ValueError):
+                return Response(
+                    {"expected_close_date": "Enter a valid date."},
+                    status=400,
+                )
+            if submitted_close_date < timezone.localdate():
+                return Response(
+                    {"expected_close_date": "Expected close date cannot be in the past."},
+                    status=400,
+                )
         serializer = DealSerializer(data=request.data); serializer.is_valid(raise_exception=True)
-        deal = serializer.save(record=contact.record, stage=Deal.Stage.PROPOSAL)
-        history(contact.record, request.user, "deal_created", {"product": deal.product.name, "value_minor": deal.value_minor, "stage": deal.stage})
+        owner_id = serializer.validated_data.pop("owner_id", None)
+        record = contact.record
+        if owner_id is not None and owner_id != record.owner_id:
+            record.owner_id = owner_id
+        record.last_contact_at = timezone.now()
+        record.save(update_fields=["owner", "last_contact_at"] if owner_id is not None else ["last_contact_at"])
+        deal = serializer.save(record=record, stage=Deal.Stage.PROPOSAL)
+        history(record, request.user, "deal_created", {"product": deal.product.name, "value_minor": deal.value_minor, "stage": deal.stage, "expected_close_date": deal.expected_close_date.isoformat()})
         return Response(DealSerializer(deal).data, status=201)
 
 
@@ -1394,6 +1416,20 @@ class DealViewSet(viewsets.ModelViewSet):
     def _update_deal(self, request, *args, partial=False, **kwargs):
         deal = self.get_object()
         before = self.get_serializer(deal).data
+        # Validate close dates explicitly on updates as well as in the serializer.
+        if "expected_close_date" in request.data and request.data.get("expected_close_date"):
+            try:
+                submitted_close_date = date.fromisoformat(str(request.data.get("expected_close_date"))[:10])
+            except (TypeError, ValueError):
+                return Response(
+                    {"expected_close_date": "Enter a valid date."},
+                    status=400,
+                )
+            if submitted_close_date < timezone.localdate():
+                return Response(
+                    {"expected_close_date": "Expected close date cannot be in the past."},
+                    status=400,
+                )
         if "value_minor" in request.data:
             if deal.stage in (Deal.Stage.WON, Deal.Stage.LOST):
                 return Response({"detail": "The value is locked because this deal is closed."}, status=400)

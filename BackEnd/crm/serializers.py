@@ -724,6 +724,8 @@ class ProductSerializer(serializers.ModelSerializer):
 # ============================================================
 
 class DealSerializer(serializers.ModelSerializer):
+    owner_id = serializers.IntegerField(write_only=True, required=False)
+
     product_name = serializers.CharField(
         source="product.name",
         read_only=True,
@@ -756,6 +758,7 @@ class DealSerializer(serializers.ModelSerializer):
             "closed_at",
             "owner_name",
             "activity_count",
+            "owner_id",
         ]
 
         read_only_fields = [
@@ -764,6 +767,22 @@ class DealSerializer(serializers.ModelSerializer):
             "created_at",
             "closed_at",
         ]
+
+    def validate_value_minor(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Deal value must be greater than zero.")
+        return value
+
+    def validate_expected_close_date(self, value):
+        if value < timezone.localdate():
+            raise serializers.ValidationError("Expected close date cannot be in the past.")
+        return value
+
+    def validate_owner_id(self, value):
+        user = User.objects.filter(pk=value, is_active=True, role__key__in=["salesperson", "sales_manager"]).first()
+        if user is None:
+            raise serializers.ValidationError("Choose an active Salesperson or Sales Manager.")
+        return value
 
 
 # ============================================================

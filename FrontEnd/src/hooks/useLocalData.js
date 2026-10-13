@@ -1584,6 +1584,7 @@ export function useLocalData(currentUser) {
                     ),
                   expected_close_date:
                     values.closeDate,
+                  owner_id: values.owner ? Number(values.owner) : undefined,
                   notes:
                     values.notes ||
                     '',

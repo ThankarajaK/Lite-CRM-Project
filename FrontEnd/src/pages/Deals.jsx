@@ -317,6 +317,9 @@ export default function Deals() {
 
           {/* Totals */}
           <div className="border-t border-slate-100 pt-3 text-sm text-slate-500 xl:ml-auto xl:border-t-0 xl:pt-0 xl:text-right">
+            <p className="mb-1 text-xs text-slate-400">
+              Showing deals you have access to · totals reflect current filters
+            </p>
             <span className="font-medium text-slate-900">
               {totals.count}
             </span>{' '}

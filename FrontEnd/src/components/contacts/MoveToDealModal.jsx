@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, Briefcase } from 'lucide-react'
 import Modal from '../ui/Modal'
 import Button from '../ui/Button'
@@ -9,10 +9,17 @@ import { useData } from '../../context/DataContext'
 import { ENTRY_STAGE } from '../../data/mockData'
 import { formatCurrency } from '../../utils/format'
 
+function localDateString(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 function defaultCloseDate() {
   const date = new Date()
   date.setDate(date.getDate() + 30)
-  return date.toISOString().slice(0, 10)
+  return localDateString(date)
 }
 
 function validate(values) {
@@ -20,7 +27,14 @@ function validate(values) {
     product: validators.required(values.product, 'Product'),
     value:
       validators.required(values.value, 'Deal value') ??
-      validators.positiveNumber(values.value, 'Deal value'),
+      (Number(values.value) <= 0 || !Number.isFinite(Number(values.value))
+        ? 'Deal value must be greater than ₹0.'
+        : undefined),
+    closeDate: !values.closeDate
+      ? 'Expected close date is required.'
+      : values.closeDate < localDateString()
+        ? 'Expected close date cannot be in the past.'
+        : undefined,
   }
 }
 
@@ -35,6 +49,7 @@ function validate(values) {
  */
 export default function MoveToDealModal({ open, onClose, onConfirm, contact }) {
   const { products, users } = useData()
+  const [closeDateInputError, setCloseDateInputError] = useState('')
 
   const contactDisplayName =
     contact?.company?.trim() ||
@@ -102,7 +117,7 @@ export default function MoveToDealModal({ open, onClose, onConfirm, contact }) {
           'User'
 
         return {
-          value: name,
+          value: String(item.id),
           label: name,
         }
       }),
@@ -116,9 +131,9 @@ export default function MoveToDealModal({ open, onClose, onConfirm, contact }) {
       closeDate: defaultCloseDate(),
       owner:
         ownerOptions.some(
-          (item) => item.value === contact?.owner
+          (item) => item.value === String(contact?.ownerId ?? '')
         )
-          ? contact?.owner
+          ? String(contact?.ownerId)
           : ownerOptions[0]?.value ?? '',
       notes: '',
     }),
@@ -133,6 +148,16 @@ export default function MoveToDealModal({ open, onClose, onConfirm, contact }) {
   }, [open, initialValues])
 
   const handleSubmit = form.submit((values) => {
+    // Final guard for the contact-to-deal flow, independent of native date-picker behavior.
+    if (!values.closeDate || values.closeDate < localDateString()) {
+      setCloseDateInputError(
+        !values.closeDate
+          ? 'Expected close date is required.'
+          : 'Expected close date cannot be in the past.'
+      )
+      return
+    }
+    setCloseDateInputError('')
     onConfirm(values)
     onClose()
   })
@@ -202,13 +227,36 @@ export default function MoveToDealModal({ open, onClose, onConfirm, contact }) {
               : 'Numbers only, e.g. 8500. You can change it later.'
           }
         >
-          <Input {...form.field('value')} type="number" min="0" step="100" placeholder="8500" />
+          <Input {...form.field('value')} type="number" min="1" step="1" placeholder="8500" />
         </Field>
 
         {/* Everything below is pre-filled — shown, but rarely touched */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Expected close" htmlFor="closeDate">
-            <Input {...form.field('closeDate')} type="date" />
+          <Field
+            label="Expected close"
+            htmlFor="closeDate"
+            error={closeDateInputError || form.field('closeDate').error}
+          >
+            <Input
+              {...form.field('closeDate')}
+              type="date"
+              min={localDateString()}
+              error={Boolean(closeDateInputError || form.field('closeDate').error)}
+              onChange={(event) => {
+                const nextDate = event.target.value
+                form.field('closeDate').onChange(event)
+                setCloseDateInputError(
+                  !nextDate
+                    ? 'Expected close date is required.'
+                    : nextDate < localDateString()
+                      ? 'Expected close date cannot be in the past.'
+                      : ''
+                )
+              }}
+              onBlur={() => {
+                form.field('closeDate').onBlur()
+              }}
+            />
           </Field>
           <Field label="Owner" htmlFor="owner">
             <Select
