@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Modal from '../ui/Modal'
 import Button from '../ui/Button'
 import {
@@ -9,6 +9,7 @@ import {
 } from '../ui/FormField'
 import { useForm, validators } from '../../hooks/useForm'
 import { useData } from '../../context/DataContext'
+import { crmApi } from '../../lib/api'
 
 const STATUS_OPTIONS = [
   {
@@ -109,6 +110,25 @@ export default function ContactFormModal({
   onSubmit,
   contact,
 }) {
+  const [configuredReasons, setConfiguredReasons] = useState([])
+
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    crmApi.businessConfiguration()
+      .then((config) => {
+        if (active) {
+          setConfiguredReasons(
+            (config.items || []).filter(
+              (item) => item.list_type === 'disqualification_reason' && item.active !== false
+            )
+          )
+        }
+      })
+      .catch((error) => console.warn('Could not load configured disqualification reasons:', error))
+    return () => { active = false }
+  }, [open])
+
   const {
     users,
     user: currentUser,
@@ -749,7 +769,11 @@ export default function ContactFormModal({
                   value: '',
                   label: 'Select reason',
                 },
-                ...REASONS.map((value) => ({
+                ...Array.from(new Set([
+                  ...REASONS,
+                  ...configuredReasons.map((item) => item.name),
+                  form.values.disqualification_reason,
+                ].filter(Boolean))).map((value) => ({
                   value,
                   label: value,
                 })),

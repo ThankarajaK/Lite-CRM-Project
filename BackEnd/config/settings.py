@@ -12,6 +12,8 @@ ACTIVITY_CORRECTION_WINDOW_HOURS = int(
     os.getenv("ACTIVITY_CORRECTION_WINDOW_HOURS", "24")
 )
 
+CRM_EXPORT_ASYNC_THRESHOLD = int(os.getenv("CRM_EXPORT_ASYNC_THRESHOLD", "5000"))
+
 
 # =============================================================================
 # Basic Django Configuration
@@ -67,6 +69,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 
     "crm.middleware.CrmSessionMiddleware",
+    "crm.middleware.AuditTrailMiddleware",
 ]
 
 
@@ -300,3 +303,5 @@ LOGIN_LOCKOUT_MINUTES = int(
         "15",
     )
 )
+# Workspace audit events are retained for seven years by default.
+CRM_AUDIT_RETENTION_YEARS = int(os.getenv("CRM_AUDIT_RETENTION_YEARS", "7"))

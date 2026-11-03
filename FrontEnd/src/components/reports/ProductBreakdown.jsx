@@ -21,6 +21,7 @@ export default function ProductBreakdown({ deals }) {
         deals: productDeals.length,
         open: open.length,
         won: won.length,
+        unqualified: productDeals.filter((deal) => Number(deal.value) === 0).length,
         revenue: won.reduce((sum, deal) => sum + (Number(deal.value) || 0), 0),
         pipeline: open.reduce((sum, deal) => sum + (Number(deal.value) || 0), 0),
       }
@@ -34,13 +35,14 @@ export default function ProductBreakdown({ deals }) {
   return (
     <Card>
       <CardHeader title="Product Performance" subtitle="What contacts are actually buying" />
-      <Table className="min-w-[680px]">
+      <Table className="min-w-[760px]">
         <THead>
           <TR>
             <TH>Product</TH>
             <TH className="text-right">Deals</TH>
             <TH className="text-right">Open</TH>
             <TH className="text-right">Won</TH>
+            <TH className="text-right">Unqualified (₹0)</TH>
             <TH className="text-right">Pipeline</TH>
             <TH className="text-right">Revenue</TH>
             <TH className="w-32">Share</TH>
@@ -53,6 +55,7 @@ export default function ProductBreakdown({ deals }) {
               <TD className="text-right">{row.deals}</TD>
               <TD className="text-right">{row.open}</TD>
               <TD className="text-right font-medium text-emerald-600">{row.won}</TD>
+              <TD className="text-right">{row.unqualified}</TD>
               <TD className="whitespace-nowrap text-right">{formatCurrency(row.pipeline)}</TD>
               <TD className="whitespace-nowrap text-right font-semibold text-slate-900">
                 {formatCurrency(row.revenue)}

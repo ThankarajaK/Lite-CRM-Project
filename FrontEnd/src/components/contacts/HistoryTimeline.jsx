@@ -22,6 +22,7 @@ import EmptyState from '../ui/EmptyState'
  */
 const ACTION_STYLES = {
   lead_captured: { icon: UserPlus, className: 'text-slate-500' },
+  contact_created: { icon: UserPlus, className: 'text-brand-600' },
   qualified: { icon: UserCheck, className: 'text-emerald-600' },
   not_qualified: { icon: CircleSlash, className: 'text-slate-400' },
   moved_to_contacts: { icon: ArrowRightLeft, className: 'text-brand-600' },

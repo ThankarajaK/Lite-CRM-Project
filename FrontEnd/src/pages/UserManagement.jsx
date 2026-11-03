@@ -717,9 +717,38 @@ export default function UserManagement() {
 
 
 
+    let statusOptions = {}
+    if (target.is_active) {
+      const strategy = window.prompt(
+        `Before deactivating ${getUserDisplayName(target)}, choose what happens to their records:\nType "reassign" to transfer records to another active user, or "retain" to keep ownership with this inactive user.`,
+        'reassign',
+      )
+      if (strategy === null) return
+      const normalizedStrategy = strategy.trim().toLowerCase()
+      if (!['reassign', 'retain'].includes(normalizedStrategy)) {
+        toast.error('Deactivation cancelled', 'Enter either reassign or retain.')
+        return
+      }
+      statusOptions.record_strategy = normalizedStrategy
+      if (normalizedStrategy === 'reassign') {
+        const candidates = users.filter((item) => item.is_active && item.id !== target.id)
+        if (!candidates.length) {
+          toast.error('Cannot reassign records', 'There are no other active users available.')
+          return
+        }
+        const choices = candidates.map((item) => `${item.id}: ${getUserDisplayName(item)} (${item.email})`).join('\n')
+        const selected = window.prompt(`Enter the ID of the active user who should receive the records:\n${choices}`)
+        if (selected === null) return
+        const selectedId = Number(selected.trim())
+        if (!candidates.some((item) => item.id === selectedId)) {
+          toast.error('Deactivation cancelled', 'Choose a valid active user ID from the list.')
+          return
+        }
+        statusOptions.reassign_to = selectedId
+      }
+    }
+
     setActionId(target.id)
-
-
 
     try {
 
@@ -727,7 +756,8 @@ export default function UserManagement() {
 
         target.id,
 
-        !target.is_active
+        !target.is_active,
+        statusOptions,
 
       )
 

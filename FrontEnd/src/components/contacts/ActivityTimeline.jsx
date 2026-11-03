@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { api } from '../../lib/api'
 
@@ -78,6 +79,7 @@ export default function ActivityTimeline({
   recordId,
   onActivityChanged,
 }) {
+  const navigate = useNavigate()
   const [loadingMore, setLoadingMore] = useState(false)
   const [correction, setCorrection] = useState(null)
   const [originalActivity, setOriginalActivity] = useState(null)
@@ -199,10 +201,24 @@ export default function ActivityTimeline({
                       </span>
 
                       {item.deal ? (
-                        <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">
-                          <Briefcase className="h-3 w-3" />
-                          {item.deal}
-                        </span>
+                        item.dealId ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              navigate(`/deals?deal=${encodeURIComponent(item.dealId)}`)
+                            }
+                            className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
+                            title={`Open deal: ${item.deal}`}
+                          >
+                            <Briefcase className="h-3 w-3" />
+                            {item.deal}
+                          </button>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">
+                            <Briefcase className="h-3 w-3" />
+                            {item.deal}
+                          </span>
+                        )
                       ) : null}
 
                       {item.edited ? (

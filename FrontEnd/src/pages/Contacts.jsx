@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Briefcase,
   Download,
@@ -39,6 +39,7 @@ import LogActivityModal from '../components/contacts/LogActivityModal'
 
 import { useData } from '../context/DataContext'
 import { useToast } from '../context/ToastContext'
+import { crmApi } from '../lib/api'
 import { useSimulatedLoading } from '../hooks/useSimulatedLoading'
 import { formatCurrency, formatDate } from '../utils/format'
 
@@ -86,10 +87,12 @@ export default function Contacts() {
     moveContactToDeal,
     loadLeadTimeline,
     activityPagination,
+    hasPermission,
   } = useData()
 
   const toast = useToast()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const loading = useSimulatedLoading()
 
   // ---------------------------------------------------------------------------
@@ -111,6 +114,19 @@ export default function Contacts() {
   const [pendingDelete, setPendingDelete] = useState(null)
   const [movingToDeal, setMovingToDeal] = useState(null)
   const [logging, setLogging] = useState(null)
+
+  useEffect(() => {
+    const targetId = searchParams.get('contact')
+    if (!targetId || !contacts.length) return
+    const target = contacts.find((contact) => String(contact.id) === String(targetId))
+    if (!target) return
+    openContact(target)
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('contact')
+      return next
+    }, { replace: true })
+  }, [contacts, searchParams, setSearchParams])
 
   async function openContact(contact) {
     if (!contact) return
@@ -237,51 +253,12 @@ export default function Contacts() {
 
   // Export every contact matching the current search and filters (not just the
   // visible page) as a real CSV file.
-  function handleExport() {
-    if (!filtered.length) {
-      toast.info('Nothing to export', 'No contacts match the current filters.')
-      return
-    }
-
-    const columns = [
-      ['Name', (contact) => contact.name],
-      ['Company', (contact) => contact.company],
-      ['Email', (contact) => contact.email],
-      ['Mobile', (contact) => contact.phone ?? contact.mobile],
-      ['Course Interested', (contact) => contact.courseInterested ?? contact.course_interested],
-      ['Learning Mode', (contact) => contact.learningMode ?? contact.learning_mode],
-      ['Course Duration', (contact) => contact.courseDuration ?? contact.course_duration],
-      ['Town / City', (contact) => contact.townCity ?? contact.town_city],
-      ['Source', (contact) => contact.source],
-      ['Status', (contact) => contact.status],
-      ['Pipeline State', (contact) => getContactDeals(contact).length ? 'In pipeline' : 'No deal yet'],
-      ['Deal Count', (contact) => getContactDeals(contact).length],
-      ['Total Deal Value', (contact) => getContactTotalValue(getContactDeals(contact))],
-      ['Owner', (contact) => contact.owner],
-      ['Last Contact Date', (contact) => contact.lastContactAt ?? contact.last_contact_at],
-      ['Captured At', (contact) => contact.createdAt ?? contact.created_at],
-    ]
-
-    const escapeCsv = (value) => {
-      const text = value == null ? '' : String(value)
-      return `"${text.replace(/"/g, '""')}"`
-    }
-    const rows = [
-      columns.map(([label]) => escapeCsv(label)).join(','),
-      ...filtered.map((contact) =>
-        columns.map(([, getValue]) => escapeCsv(getValue(contact))).join(','),
-      ),
-    ]
-    const blob = new Blob(['\uFEFF', rows.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `litecrm-contacts-${new Date().toISOString().slice(0, 10)}.csv`
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-    URL.revokeObjectURL(url)
-    toast.success('Contacts exported', `${filtered.length} contacts exported to CSV.`)
+  async function handleExport(format = 'csv') {
+    try {
+      const result = await crmApi.createExport('contacts', format, { search: query, pipeline })
+      if (result?.job_id) toast.info('Export queued', `Exporting ${result.row_count} rows. You will be notified when ready.`)
+      else toast.success('Contacts exported', `The filtered contact list was downloaded as ${format.toUpperCase()}.`)
+    } catch (err) { toast.error('Export failed', err.message || 'Could not export contacts.') }
   }
 
   // ---------------------------------------------------------------------------
@@ -556,14 +533,10 @@ export default function Contacts() {
                 className="w-full sm:min-w-0 xl:w-44"
               />
 
-              <Button
-                variant="secondary"
-                icon={Download}
-                onClick={handleExport}
-                className="w-full sm:w-auto"
-              >
-                Export
-              </Button>
+              {hasPermission('export_records') && <>
+                <Button variant="secondary" icon={Download} onClick={() => handleExport('csv')} className="w-full sm:w-auto">Export CSV</Button>
+                <Button variant="secondary" icon={Download} onClick={() => handleExport('xlsx')} className="w-full sm:w-auto">Export Excel</Button>
+              </>}
             </div>
           </div>
         </div>

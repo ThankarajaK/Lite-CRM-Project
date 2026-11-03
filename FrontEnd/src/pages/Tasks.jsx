@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
-import { CheckSquare, Plus } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { CheckSquare, Download, Plus } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
 import PageHeader from '../components/ui/PageHeader'
 import Button from '../components/ui/Button'
 import Card from '../components/ui/Card'
@@ -13,6 +14,7 @@ import TaskItem from '../components/tasks/TaskItem'
 import TaskFormModal from '../components/tasks/TaskFormModal'
 import { useData } from '../context/DataContext'
 import { useToast } from '../context/ToastContext'
+import { crmApi } from '../lib/api'
 import { useSimulatedLoading } from '../hooks/useSimulatedLoading'
 import { TASK_PRIORITIES } from '../data/mockData'
 import { daysFromToday } from '../utils/format'
@@ -38,9 +40,11 @@ export default function Tasks() {
     updateTask,
     toggleTask,
     deleteTask,
+    hasPermission,
   } = useData()
 
   const toast = useToast()
+  const [searchParams, setSearchParams] = useSearchParams()
   const loading = useSimulatedLoading()
 
   const [tab, setTab] = useState('all')
@@ -51,6 +55,20 @@ export default function Tasks() {
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [pendingDelete, setPendingDelete] = useState(null)
+
+  useEffect(() => {
+    const targetId = searchParams.get('task')
+    if (!targetId || !tasks.length) return
+    const target = tasks.find((task) => String(task.id) === String(targetId))
+    if (!target) return
+    setEditing(target)
+    setFormOpen(true)
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('task')
+      return next
+    }, { replace: true })
+  }, [tasks, searchParams, setSearchParams])
 
   const counts = useMemo(
     () => ({
@@ -162,13 +180,10 @@ export default function Tasks() {
         title="Tasks"
         subtitle="Manage your follow-ups and activities"
         actions={
-          <Button
-            icon={Plus}
-            onClick={openCreateForm}
-            className="w-full sm:w-auto"
-          >
-            Add Task
-          </Button>
+          <div className="flex flex-wrap gap-2 print:hidden">
+            {hasPermission('export_records') && ['csv', 'xlsx'].map((format) => <Button key={format} variant="secondary" icon={Download} onClick={async () => { try { const status = tab === 'completed' ? 'completed' : ['today', 'upcoming', 'overdue'].includes(tab) ? 'open' : ''; const task_period = ['today', 'upcoming', 'overdue'].includes(tab) ? tab : ''; const result = await crmApi.createExport('tasks', format, { search: query, status, task_period, priority, assignee }); if (result?.job_id) toast.info('Export queued', `Exporting ${result.row_count} rows. You will be notified when ready.`); else toast.success('Tasks exported', `The filtered task list was downloaded as ${format.toUpperCase()}.`) } catch (err) { toast.error('Export failed', err.message || 'Could not export tasks.') } }}>{format === 'csv' ? 'Export CSV' : 'Export Excel'}</Button>)}
+            <Button icon={Plus} onClick={openCreateForm} className="w-full sm:w-auto">Add Task</Button>
+          </div>
         }
       />
 

@@ -97,7 +97,79 @@ export async function downloadFile(path, options = {}) {
   return response.blob()
 }
 
+
+export async function createExport(report, format = 'csv', filters = {}) {
+  const params = new URLSearchParams()
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') params.set(key, String(value))
+  })
+  const response = await fetch(`${API_BASE_URL}/exports/${params.toString() ? `?${params}` : ''}`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(csrfToken() ? { 'X-CSRFToken': csrfToken() } : {}),
+    },
+    body: JSON.stringify({ report, format }),
+  })
+  const contentType = response.headers.get('content-type') || ''
+  if (!response.ok) {
+    const body = contentType.includes('application/json') ? await response.json().catch(() => ({})) : {}
+    throw new Error(body.detail || 'Export failed. Check your export permission and try again.')
+  }
+  if (response.status === 202 || contentType.includes('application/json')) return response.json()
+  const blob = await response.blob()
+  const disposition = response.headers.get('content-disposition') || ''
+  const match = disposition.match(/filename="?([^";]+)"?/i)
+  const filename = match?.[1] || `litecrm-${report}-${new Date().toISOString().slice(0, 10)}.${format}`
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+  return { downloaded: true, filename }
+}
+
 export const crmApi = {
+  workspaceAudit: (filters = {}) => {
+    const params = new URLSearchParams()
+    Object.entries(filters).forEach(([key, value]) => { if (value !== undefined && value !== null && value !== '') params.set(key, String(value)) })
+    return api(`/audit/${params.toString() ? `?${params}` : ''}`)
+  },
+  exportWorkspaceAudit: (filters = {}) => {
+    const params = new URLSearchParams({ ...filters, export: 'csv' })
+    return downloadFile(`/audit/?${params.toString()}`)
+  },
+  businessConfiguration: () => api('/business-configuration/'),
+  saveBusinessConfiguration: (data) => api('/business-configuration/', { method: 'PUT', body: JSON.stringify(data) }),
+  createBusinessListItem: (data) => api('/business-configuration/', { method: 'POST', body: JSON.stringify(data) }),
+  updateBusinessListItem: (id, data) => api(`/business-configuration/items/${id}/`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteBusinessListItem: (id) => api(`/business-configuration/items/${id}/`, { method: 'DELETE' }),
+  createExport: (report, format = 'csv', filters = {}) => createExport(report, format, filters),
+
+  // Live, permission-scoped EPIC 10 pipeline and conversion reports.
+  pipelineConversionReports: (filters = {}) => {
+    const params = new URLSearchParams()
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') params.set(key, String(value))
+    })
+    const query = params.toString()
+    return api(`/reports/pipeline-conversion/${query ? `?${query}` : ''}`)
+  },
+
+  // Permission-scoped EPIC 10 / US-10.3 salesperson performance report.
+  salespersonPerformanceReports: (filters = {}) => {
+    const params = new URLSearchParams()
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') params.set(key, String(value))
+    })
+    const query = params.toString()
+    return api(`/reports/salesperson-performance/${query ? `?${query}` : ''}`)
+  },
+
   // ---------------------------------------------------------------------------
   // Authentication
   // ---------------------------------------------------------------------------
@@ -409,11 +481,13 @@ export const crmApi = {
   changeUserStatus: (
     id,
     isActive,
+    options = {},
   ) =>
     api(`/users/${id}/status/`, {
       method: 'PATCH',
       body: JSON.stringify({
         is_active: isActive,
+        ...options,
       }),
     }),
 
@@ -434,6 +508,15 @@ export const crmApi = {
 
   roles: () =>
     api('/roles/'),
+
+  roleMatrix: () =>
+    api('/roles/matrix/'),
+
+  saveRoleMatrix: (data) =>
+    api('/roles/matrix/', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
 
   // ---------------------------------------------------------------------------
   // Contacts

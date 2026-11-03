@@ -1,0 +1,34 @@
+﻿Report,Pipeline Conversion
+Period,2026-10-01-to-2026-10-28
+Generated,28 Oct 2026 12:02 UTC
+Filters,"{""end_date"": ""2026-10-28"", ""owner"": """", ""product"": """", ""start_date"": ""2026-10-01""}"
+
+Average Age Days,Count,Deal Count,Inactive 14 Days,Label,Lead Volume,Metric,Open Pipeline Minor,Product,Product Id,Reason,Section,Source,Stage,Value,Value Minor,Won Deals,Won Revenue Minor,Won Value Minor
+19.0,40,,36,Proposal,,,,,,,Pipeline,,proposal,,1333345105200,,,
+11.2,5,,5,Negotiation,,,,,,,Pipeline,,negotiation,,1335000,,,
+16.0,11,,0,Won,,,,,,,Pipeline,,won,,1630700,,,
+15.7,10,,0,Lost,,,,,,,Pipeline,,lost,,11633000,,,
+,1,,,,,,,,,no_response,Lost deals,,,,9099900,,,
+,6,,,,,,,,,other,Lost deals,,,,1702000,,,
+,1,,,,,,,,,timing,Lost deals,,,,800000,,,
+,1,,,,,,,,,competitor,Lost deals,,,,21200,,,
+,1,,,,,,,,,price,Lost deals,,,,9900,,,
+,,,,,21,,,,,,Lead sources,Facebook,,,,3,,99900
+,,,,,1,,,,,,Lead sources,Referral,,,,1,,122200
+,,15,,,,,797000,ckk,13,,Products,,,,,,69800,
+,,10,,,,,1428100,CRM Licenced,5,,Products,,,,,,0,
+,,12,,,,,1634000,Data Migration,8,,Products,,,,,,292200,
+,,4,,,,,84200,Implementation,6,,Products,,,,,,900,
+,,2,,,,,2300,JS,4,,Products,,,,,,369000,
+,,4,,,,,7060000,NEEEEWWWW,12,,Products,,,,,,10000,
+,,13,,,,,666667388900,Training & Onboarding,9,,Products,,,,,,888800,
+,,6,,,,,666668045700,Website Development,7,,Products,,,,,,0,
+,,,,,,captured,,,,,Conversion funnel,,,22,,,,
+,,,,,,qualified,,,,,Conversion funnel,,,10,,,,
+,,,,,,contacts,,,,,Conversion funnel,,,20,,,,
+,,,,,,deals,,,,,Conversion funnel,,,10,,,,
+,,,,,,won,,,,,Conversion funnel,,,6,,,,
+,,,,,,qualified_from_captured,,,,,Conversion rates,,,45.5,,,,
+,,,,,,contacts_from_qualified,,,,,Conversion rates,,,200.0,,,,
+,,,,,,deals_from_contacts,,,,,Conversion rates,,,50.0,,,,
+,,,,,,won_from_deals,,,,,Conversion rates,,,60.0,,,,

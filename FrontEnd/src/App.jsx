@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import AppLayout from './components/layout/AppLayout'
 import { DataProvider } from './context/DataContext'
@@ -18,6 +18,9 @@ import CourseDurations from './pages/CourseDurations'
 import CourseInterested from './pages/CourseInterested'
 import LeadSources from './pages/LeadSources'
 import UserManagement from './pages/UserManagement'
+import RolePermissions from './pages/RolePermissions'
+import BusinessConfiguration from './pages/BusinessConfiguration'
+import WorkspaceAudit from './pages/WorkspaceAudit'
 
 import { crmApi } from './lib/api'
 
@@ -26,6 +29,7 @@ import { crmApi } from './lib/api'
  * Authentication is API-backed; CRM data is progressively API-backed.
  */
 export default function App() {
+  const navigate = useNavigate()
   const [user, setUser] = useState(undefined)
 
   useEffect(() => {
@@ -55,9 +59,23 @@ export default function App() {
             element={
               <AppLayout
                 user={user}
-                onLogout={() => {
-                  crmApi.logout().catch(() => {})
+                onLogout={async () => {
+                  // End the server session before allowing another user to sign in.
+                  try {
+                    await crmApi.logout()
+                  } catch {
+                    // Always clear the local UI session, even if the request fails.
+                  }
+
+                  // Remove any stale deep-link destination from the previous user.
+                  try {
+                    sessionStorage.removeItem('litecrm_post_login_redirect')
+                  } catch {
+                    // Storage may be unavailable; navigation still resets the route.
+                  }
+
                   setUser(null)
+                  navigate('/', { replace: true, state: null })
                 }}
               />
             }
@@ -108,6 +126,17 @@ export default function App() {
             />
 
             <Route path="/settings" element={<Settings />} />
+
+            <Route path="/role-permissions" element={<RolePermissions />} />
+            <Route path="/business-configuration" element={<BusinessConfiguration />} />
+            <Route
+              path="/audit"
+              element={
+                user.permissions?.includes('view_audit')
+                  ? <WorkspaceAudit />
+                  : <Navigate to="/" replace />
+              }
+            />
 
             <Route
               path="*"

@@ -3,17 +3,18 @@
  * Everything here is pure presentation — no data fetching, no side effects.
  */
 
-/** Format a number as Indian Rupees, e.g. 8500 -> "₹8,500". */
+let workspaceFormat = { currency: 'INR', date_format: 'DD-MM-YYYY', timezone: 'Asia/Kolkata' }
+export function setWorkspaceFormat(config = {}) { workspaceFormat = { ...workspaceFormat, ...config } }
+
+/** Format monetary values using the active workspace currency (amounts remain unchanged). */
 export function formatCurrency(value, { compact = false } = {}) {
   const amount = Number(value) || 0
+  const currency = workspaceFormat.currency || 'INR'
   if (compact && Math.abs(amount) >= 1000) {
-    return `₹${(amount / 1000).toFixed(amount % 1000 === 0 ? 0 : 1)}k`
+    const formatted = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 1 }).format(amount / 1000)
+    return `${new Intl.NumberFormat('en-IN', { style: 'currency', currency, maximumFractionDigits: 0 }).format(1000).replace(/[0-9,\s]/g, '')}${formatted}k`
   }
-  return amount.toLocaleString('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0,
-  })
+  return new Intl.NumberFormat('en-IN', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount)
 }
 
 /** "2026-09-28" -> "Sep 28, 2026" */
@@ -21,11 +22,13 @@ export function formatDate(value) {
   if (!value) return '—'
   const date = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(date.getTime())) return '—'
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: workspaceFormat.timezone || 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' }).formatToParts(date)
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
+  const format = workspaceFormat.date_format || 'DD-MM-YYYY'
+  if (format === 'YYYY-MM-DD') return `${values.year}-${values.month}-${values.day}`
+  if (format === 'MM-DD-YYYY') return `${values.month}-${values.day}-${values.year}`
+  if (format === 'DD/MM/YYYY') return `${values.day}/${values.month}/${values.year}`
+  return `${values.day}-${values.month}-${values.year}`
 }
 
 /** "2026-09-28" -> "Sep 28" (used on compact cards) */

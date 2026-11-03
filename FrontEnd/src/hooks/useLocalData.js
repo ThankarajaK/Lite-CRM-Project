@@ -400,6 +400,7 @@ export function useLocalData(currentUser) {
         status: item.status === 'qualified' ? 'Qualified' : item.status === 'not_qualified' ? 'Not Qualified' : (item.status ?? ''),
         disqualification_reason: item.disqualification_reason ?? '',
         movedAt: item.became_contact_at ?? null,
+        createdAt: item.became_contact_at?.slice?.(0, 10) ?? null,
         lastContact: item.last_contact_at ?? null,
         notes: item.notes ?? '',
       }))
@@ -463,6 +464,12 @@ export function useLocalData(currentUser) {
               0,
               10,
             ),
+          lossReason: item.loss_reason || '',
+          lossReasonDetail: item.loss_reason_detail || '',
+          contractStartDate: item.contract_start_date || '',
+          closeNote: item.close_note || '',
+          reopenedAt: item.reopened_at || null,
+          activityCount: item.activity_count ?? 0,
           notes:
             item.notes,
         }
@@ -911,6 +918,8 @@ export function useLocalData(currentUser) {
                 item.happened_at,
               deal:
                 item.deal_name ?? '',
+              dealId:
+                item.deal ?? null,
               authorId:
                 item.author_id ?? null,
               edited:
@@ -1739,75 +1748,52 @@ export function useLocalData(currentUser) {
 
   const updateDealValue =
     useCallback(
-      (
-        id,
-        nextValue,
-      ) => {
-        const deal =
-          deals.find(
-            (item) =>
-              item.id ===
-              id,
-          )
-
-        if (!deal)
-          return null
-
-        if (
-          !OPEN_STAGES.includes(
-            deal.stage,
-          )
-        ) {
-          return null
+      async (id, nextValue) => {
+        const deal = deals.find((item) => String(item.id) === String(id))
+        if (!deal) throw new Error('Deal not found. Refresh the board and try again.')
+        if (!OPEN_STAGES.includes(deal.stage)) {
+          throw new Error('The value is locked because this deal is closed.')
         }
 
-        const value =
-          Number(
-            nextValue,
-          ) || 0
-
-        if (
-          value ===
-          deal.value
-        ) {
-          return deal
+        const value = Number(nextValue)
+        if (!Number.isFinite(value) || value < 0) {
+          throw new Error('Deal value cannot be negative.')
         }
+        if (value === Number(deal.value)) return deal
 
-        setDeals(
-          (current) =>
-            current.map(
-              (item) =>
-                item.id ===
-                id
-                  ? {
-                      ...item,
-                      value,
-                    }
-                  : item,
-            ),
-        )
+        // Optimistic update for the board and open deal drawer.
+        setDeals((current) => current.map((item) =>
+          String(item.id) === String(id) ? { ...item, value } : item
+        ))
 
-
-        pushFeed({
-          type: 'Value updated',
-          description:
-            `changed the value of ${deal.name}`,
-          detail:
-            `${money(deal.value)} → ${money(value)} during ${deal.stage}.`,
-          company:
-            deal.contact,
-        })
-
-        return {
-          ...deal,
-          value,
+        try {
+          await api(`/deals/${id}/`, {
+            method: 'PATCH',
+            body: JSON.stringify({ value_minor: Math.round(value * 100) }),
+          })
+          // Pull the server-confirmed value and recalculate all derived totals.
+          await refreshCrm()
+          pushFeed({
+            type: 'Value updated',
+            description: `changed the value of ${deal.name}`,
+            detail: `${money(deal.value)} → ${money(value)} during ${deal.stage}.`,
+            company: deal.contact,
+          })
+          return { ...deal, value }
+        } catch (error) {
+          // Restore state from the server where possible; if refresh fails,
+          // explicitly restore the previous value locally.
+          try {
+            await refreshCrm()
+          } catch {
+            setDeals((current) => current.map((item) =>
+              String(item.id) === String(id) ? { ...item, value: deal.value } : item
+            ))
+          }
+          throw error
         }
       },
-      [
-        deals,
-        pushFeed,
-        recordIdForDeal,
-      ],
+      [deals, pushFeed, refreshCrm],
     )
 
   const moveDeal =
@@ -1815,6 +1801,7 @@ export function useLocalData(currentUser) {
       async (
         id,
         stage,
+        closeOptions = {},
       ) => {
         const currentDeal =
           deals.find(
@@ -1857,15 +1844,15 @@ export function useLocalData(currentUser) {
               method: 'POST',
               body: JSON.stringify(
                 {
-                  stage:
-                    stage.toLowerCase(),
-                  ...(stage ===
-                  'Lost'
-                    ? {
-                        loss_reason:
-                          'other',
-                      }
-                    : {}),
+                  stage: stage.toLowerCase(),
+                  ...(stage === 'Lost' ? {
+                    loss_reason: closeOptions.loss_reason,
+                    loss_reason_detail: closeOptions.loss_reason_detail || '',
+                  } : {}),
+                  ...(stage === 'Won' ? {
+                    contract_start_date: closeOptions.contract_start_date || null,
+                    close_note: closeOptions.close_note || '',
+                  } : {}),
                 },
               ),
             },
@@ -1896,9 +1883,13 @@ export function useLocalData(currentUser) {
 
           return moved
         } catch (error) {
-          // If persistence fails, restore the UI from the backend instead
-          // of leaving an optimistic stage that disappears later.
-          await refreshCrm()
+          // If persistence fails, try to restore the server-confirmed state.
+          // Preserve the original move error even if the refresh also fails.
+          try {
+            await refreshCrm()
+          } catch (refreshError) {
+            console.warn('Could not refresh CRM after a failed deal move:', refreshError)
+          }
           throw error
         }
       },
@@ -1908,6 +1899,19 @@ export function useLocalData(currentUser) {
         refreshCrm,
       ],
     )
+
+  const reopenDeal = useCallback(async (id, reason) => {
+    try {
+      await api(`/deals/${id}/reopen/`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      })
+      await refreshCrm()
+    } catch (error) {
+      await refreshCrm().catch(() => {})
+      throw error
+    }
+  }, [refreshCrm])
 
   const deleteDeal =
     useCallback(
@@ -2277,6 +2281,7 @@ export function useLocalData(currentUser) {
     updateDeal,
     updateDealValue,
     moveDeal,
+    reopenDeal,
     deleteDeal,
 
     // -------------------------------------------------------------------------

@@ -11,6 +11,9 @@ import {
   BookOpen,
   Megaphone,
   UserCog,
+  ShieldCheck,
+  SlidersHorizontal,
+  ScrollText,
 } from 'lucide-react'
 
 /** Main sidebar navigation. Order here is the order on screen. */
@@ -59,6 +62,22 @@ export const NAV_ITEMS = [
   },
 
   {
+    to: '/audit',
+    label: 'Workspace Audit',
+    icon: ScrollText,
+    subtitle: 'Search workspace changes and access events',
+    permission: 'view_audit',
+  },
+
+  {
+    to: '/role-permissions',
+    label: 'Role & Permissions',
+    icon: ShieldCheck,
+    subtitle: 'Configure role access and permissions',
+    permission: 'manage_permissions',
+  },
+
+  {
     label: 'Course Interested',
     to: '/course-interested',
     icon: BookOpen,
@@ -87,6 +106,14 @@ export const NAV_ITEMS = [
     icon: Megaphone,
     subtitle: 'Manage lead sources',
     permission: 'manage_catalogue',
+  },
+
+  {
+    to: '/business-configuration',
+    label: 'Business Configuration',
+    icon: SlidersHorizontal,
+    subtitle: 'Configure workspace lists and business rules',
+    permission: 'manage_configuration',
   },
 
   {

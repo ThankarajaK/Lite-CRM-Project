@@ -22,7 +22,7 @@ import {
   useEscapeKey,
 } from '../../hooks/useDismissable'
 
-import { api } from '../../lib/api'
+import { api, downloadFile } from '../../lib/api'
 import { getPageMeta } from './navigation'
 import { useData } from '../../context/DataContext'
 import {
@@ -37,7 +37,14 @@ import {
 
 function notificationTitle(eventType) {
   const titles = {
+    'export.ready': 'Export ready',
+    'export.failed': 'Export failed',
     'lead.moved_to_contacts': 'Lead moved to Contacts',
+    'record.assigned': 'Record assigned to you',
+    'deal.stage_changed': 'Deal stage changed',
+    'lead.qualified': 'Lead qualified',
+    'record.mentioned': 'You were mentioned',
+    'task.overdue': 'Task overdue',
     'deal.value_changed': 'Deal value changed',
     'deal.won': 'Deal won',
     'deal.lost': 'Deal lost',
@@ -52,16 +59,19 @@ function notificationTitle(eventType) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
-async function fetchNotifications(setItems) {
+async function fetchNotifications(setItems, search = '') {
   try {
-    const response = await api('/notifications/')
+    const query = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : ''
+    const response = await api(`/notifications/${query}`)
     const results = response?.results ?? response ?? []
     setItems(results.map((item) => ({
       id: item.id,
       title: notificationTitle(item.event_type),
       body: item.message,
+      exportJobId: item.event_type === 'export.ready' ? item.message.match(/\/api\/exports\/jobs\/([a-f0-9-]+)\/download\//i)?.[1] : null,
       timestamp: item.created_at,
       unread: !item.read_at,
+      targetUrl: item.target_url || null,
     })))
   } catch (error) {
     // Keep the current list visible if the API temporarily fails.
@@ -70,18 +80,20 @@ async function fetchNotifications(setItems) {
 }
 
 function NotificationsMenu({ user }) {
+  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState([])
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     fetchNotifications(setItems)
     const intervalId = window.setInterval(
-      () => fetchNotifications(setItems),
+      () => fetchNotifications(setItems, search),
       30000,
     )
 
     return () => window.clearInterval(intervalId)
-  }, [user?.id])
+  }, [user?.id, search])
 
   const ref = useClickOutside(
     open,
@@ -96,6 +108,23 @@ function NotificationsMenu({ user }) {
   const unread = items.filter(
     (item) => item.unread
   ).length
+
+  const downloadReadyExport = async (jobId) => {
+    try {
+      const status = await api(`/exports/jobs/${jobId}/`)
+      const blob = await downloadFile(`/exports/jobs/${jobId}/download/`)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = status.filename || `litecrm-export-${jobId}`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Unable to download export:', error)
+    }
+  }
 
   const markAllRead = async () => {
     try {
@@ -113,6 +142,34 @@ function NotificationsMenu({ user }) {
     }
   }
 
+  const openNotifications = async () => {
+    const willOpen = !open
+    setOpen(willOpen)
+    if (!willOpen) return
+    await fetchNotifications(setItems, search)
+    try {
+      await api('/notifications/mark-all-read/', { method: 'POST' })
+      setItems((current) => current.map((item) => ({ ...item, unread: false })))
+    } catch (error) {
+      console.error('Unable to mark notifications as read:', error)
+    }
+  }
+
+  const openNotification = async (item) => {
+    if (item.unread) {
+      try {
+        await api(`/notifications/${item.id}/read/`, { method: 'POST' })
+        setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, unread: false } : entry))
+      } catch (error) {
+        console.error('Unable to mark notification as read:', error)
+      }
+    }
+    if (item.targetUrl) {
+      navigate(item.targetUrl)
+      setOpen(false)
+    }
+  }
+
   return (
     <div
       ref={ref}
@@ -124,11 +181,7 @@ function NotificationsMenu({ user }) {
       >
         <button
           type="button"
-          onClick={() => {
-            const willOpen = !open
-            setOpen(willOpen)
-            if (willOpen) fetchNotifications(setItems)
-          }}
+          onClick={openNotifications}
           aria-label={`Notifications${
             unread
               ? `, ${unread} unread`
@@ -149,8 +202,8 @@ function NotificationsMenu({ user }) {
           <Bell className="h-[18px] w-[18px]" />
 
           {unread > 0 ? (
-            <span className="absolute right-2 top-2 flex h-2 w-2">
-              <span className="h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+            <span className="absolute -right-1 -top-1 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold leading-4 text-white ring-2 ring-white">
+              {unread > 99 ? '99+' : unread}
             </span>
           ) : null}
         </button>
@@ -196,6 +249,21 @@ function NotificationsMenu({ user }) {
             ) : null}
           </div>
 
+          <div className="border-b border-slate-100 px-3 py-2">
+            <label className="sr-only" htmlFor="notification-search">Search notifications</label>
+            <input
+              id="notification-search"
+              type="search"
+              value={search}
+              onChange={(event) => {
+                setSearch(event.target.value)
+                fetchNotifications(setItems, event.target.value)
+              }}
+              placeholder="Search notifications…"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+            />
+          </div>
+
           {/* Notification list */}
           {items.length > 0 ? (
             <ul className="max-h-[min(22rem,60vh)] divide-y divide-slate-100 overflow-y-auto">
@@ -222,13 +290,18 @@ function NotificationsMenu({ user }) {
                     />
 
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-slate-900">
-                        {item.title}
-                      </p>
-
-                      <p className="mt-1 text-sm leading-5 text-slate-500">
-                        {item.body}
-                      </p>
+                      {item.targetUrl ? (
+                        <button type="button" onClick={() => openNotification(item)} className="block w-full text-left">
+                          <p className="truncate text-sm font-medium text-slate-900">{item.title}</p>
+                          <p className="mt-1 text-sm leading-5 text-slate-500">{item.body}</p>
+                        </button>
+                      ) : (
+                        <>
+                          <p className="truncate text-sm font-medium text-slate-900">{item.title}</p>
+                          <p className="mt-1 text-sm leading-5 text-slate-500">{item.body}</p>
+                        </>
+                      )}
+                      {item.exportJobId && <button type="button" onClick={() => downloadReadyExport(item.exportJobId)} className="mt-2 text-sm font-medium text-blue-700 hover:underline">Download export</button>}
 
                       <p className="mt-1.5 text-xs text-slate-400">
                         {formatRelativeTime(

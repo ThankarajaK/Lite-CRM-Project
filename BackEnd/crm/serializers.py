@@ -548,6 +548,7 @@ class HistorySerializer(serializers.ModelSerializer):
         "deal_stage_changed": "Stage changed",
         "deal_won": "Deal won",
         "deal_lost": "Deal lost",
+        "deal_reopened": "Deal reopened",
         "reassigned": "Reassigned",
         "edited": "Edited",
         "merged": "Merged",
@@ -560,6 +561,7 @@ class HistorySerializer(serializers.ModelSerializer):
         "lead_reassigned": "Reassigned",
         "lead_deleted": "Deleted",
         "contact_updated": "Edited",
+        "contact_created": "Contact created",
         "contact_created_directly": "Edited",
         "deal_stage_changed": "Stage changed",
     }
@@ -619,10 +621,28 @@ class HistorySerializer(serializers.ModelSerializer):
         if "from_value_minor" in detail or "to_value_minor" in detail:
             before = int(detail.get("from_value_minor") or 0) / 100
             after = int(detail.get("to_value_minor") or 0) / 100
-            return f"₹{before:,.2f} → ₹{after:,.2f}"
+            stage = detail.get("stage")
+            summary = f"₹{before:,.2f} to ₹{after:,.2f}"
+            return f"{summary} during {stage}" if stage else summary
+
+        if detail.get("to_stage") in ("won", "lost") and "value_minor" in detail:
+            value = int(detail.get("value_minor") or 0) / 100
+            parts = [f"Value at close: ₹{value:,.2f}"]
+            if detail.get("loss_reason"):
+                parts.append(f"Reason: {str(detail['loss_reason']).replace('_', ' ')}")
+            if detail.get("loss_reason_detail"):
+                parts.append(str(detail["loss_reason_detail"]))
+            if detail.get("contract_start_date"):
+                parts.append(f"Contract starts: {detail['contract_start_date']}")
+            if detail.get("close_note"):
+                parts.append(f"Note: {detail['close_note']}")
+            return " · ".join(parts)
 
         if "from_stage" in detail or "to_stage" in detail:
-            return f"{detail.get('from_stage', '—')} → {detail.get('to_stage', '—')}"
+            summary = f"{detail.get('from_stage', '—')} → {detail.get('to_stage', '—')}"
+            if obj.action == "deal_reopened" and detail.get("reason"):
+                return f"{summary} · Reason: {detail['reason']}"
+            return summary
 
         if "reason" in detail and detail.get("reason"):
             return str(detail["reason"])
@@ -753,9 +773,13 @@ class DealSerializer(serializers.ModelSerializer):
             "stage",
             "expected_close_date",
             "loss_reason",
+            "loss_reason_detail",
+            "contract_start_date",
+            "close_note",
             "notes",
             "created_at",
             "closed_at",
+            "reopened_at",
             "owner_name",
             "activity_count",
             "owner_id",
@@ -766,11 +790,19 @@ class DealSerializer(serializers.ModelSerializer):
             "record",
             "created_at",
             "closed_at",
+            "reopened_at",
         ]
 
     def validate_value_minor(self, value):
-        if value <= 0:
-            raise serializers.ValidationError("Deal value must be greater than zero.")
+        if value < 0:
+            raise serializers.ValidationError("Deal value cannot be negative.")
+        # The frontend uses JavaScript Number for currency values. Keep the
+        # stored paise value within its exact-integer range so large values
+        # cannot silently lose precision in deal cards, edits, or reports.
+        if value > 9_007_199_254_740_991:
+            raise serializers.ValidationError(
+                "Deal value exceeds the maximum amount this application can safely represent."
+            )
         return value
 
     def validate_expected_close_date(self, value):
@@ -1333,6 +1365,8 @@ class AdminUserRoleSerializer(serializers.Serializer):
 # ============================================================
 
 class NotificationSerializer(serializers.ModelSerializer):
+    target_url = serializers.SerializerMethodField()
+
     class Meta:
         model = Notification
         fields = [
@@ -1341,5 +1375,21 @@ class NotificationSerializer(serializers.ModelSerializer):
             "message",
             "read_at",
             "created_at",
+            "target_type",
+            "target_id",
+            "target_url",
         ]
         read_only_fields = fields
+
+    def get_target_url(self, obj):
+        routes = {
+            "lead": ("/leads", "lead"),
+            "contact": ("/contacts", "contact"),
+            "deal": ("/deals", "deal"),
+            "task": ("/tasks", "task"),
+        }
+        route_and_param = routes.get(obj.target_type)
+        if not route_and_param or not obj.target_id:
+            return None
+        route, param = route_and_param
+        return f"{route}?{param}={obj.target_id}"

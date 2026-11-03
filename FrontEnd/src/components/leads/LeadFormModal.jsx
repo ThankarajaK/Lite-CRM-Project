@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Modal from '../ui/Modal'
 import Button from '../ui/Button'
 import {
@@ -11,6 +11,7 @@ import {
   useForm,
   validators,
 } from '../../hooks/useForm'
+import { crmApi } from '../../lib/api'
 
 const STATUS_OPTIONS = [
   {
@@ -170,6 +171,19 @@ export default function LeadFormModal({
   currentUser,
   canReassign,
 }) {
+  const [configuredReasons, setConfiguredReasons] = useState([])
+
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    crmApi.businessConfiguration()
+      .then((config) => {
+        if (active) setConfiguredReasons((config.items || []).filter((item) => item.list_type === 'disqualification_reason'))
+      })
+      .catch((error) => console.warn('Could not load configured disqualification reasons:', error))
+    return () => { active = false }
+  }, [open])
+
   const initialValues = useMemo(() => {
     /*
      * Support both the frontend camelCase model and
@@ -980,17 +994,30 @@ export default function LeadFormModal({
                 'disqualification_reason',
               )}
               options={[
-                {
-                  value: '',
-                  label:
-                    'Select reason',
-                },
-                ...REASONS.map(
-                  (value) => ({
-                    value,
-                    label: value,
-                  }),
-                ),
+                { value: '', label: 'Select reason' },
+                // Keep the built-in reasons available for every lead,
+                // regardless of whether Admin has configured custom reasons.
+                ...REASONS.map((value) => ({ value, label: value })),
+                // Append active Admin-configured reasons without duplicates.
+                ...Array.from(
+                  new Set(
+                    configuredReasons
+                      .filter((item) => item?.active && item?.name)
+                      .map((item) => item.name.trim())
+                      .filter((value) => value && !REASONS.includes(value))
+                  )
+                ).map((value) => ({ value, label: value })),
+                // Preserve a legacy/current value even if it was deactivated.
+                ...(form.values.disqualification_reason &&
+                !REASONS.includes(form.values.disqualification_reason) &&
+                !configuredReasons.some(
+                  (item) => item?.name === form.values.disqualification_reason
+                )
+                  ? [{
+                      value: form.values.disqualification_reason,
+                      label: form.values.disqualification_reason,
+                    }]
+                  : []),
               ]}
             />
           </Field>

@@ -1,10 +1,11 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Modal from '../ui/Modal'
 import Button from '../ui/Button'
 import { Field, Input, Select, Textarea } from '../ui/FormField'
 import { useForm, validators } from '../../hooks/useForm'
 import { useData } from '../../context/DataContext'
 import { TASK_PRIORITIES, TASK_TYPES } from '../../data/mockData'
+import { crmApi } from '../../lib/api'
 
 function today() {
   return new Date().toISOString().slice(0, 10)
@@ -20,6 +21,18 @@ function validate(values) {
 /** Add / Edit task dialog. */
 export default function TaskFormModal({ open, onClose, onSubmit, task, contacts = [] }) {
   const { users } = useData()
+  const [configuredTaskTypes, setConfiguredTaskTypes] = useState([])
+
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    crmApi.businessConfiguration()
+      .then((config) => {
+        if (active) setConfiguredTaskTypes((config.items || []).filter((item) => item.list_type === 'task_type'))
+      })
+      .catch((error) => console.warn('Could not load configured task types:', error))
+    return () => { active = false }
+  }, [open])
   const initialValues = useMemo(() => {
     const base = {
       title: '',
@@ -88,7 +101,11 @@ export default function TaskFormModal({ open, onClose, onSubmit, task, contacts 
         </Field>
 
         <Field label="Type" htmlFor="type">
-          <Select {...form.field('type')} options={TASK_TYPES} />
+          <Select {...form.field('type')} options={Array.from(new Set([
+            ...TASK_TYPES,
+            ...configuredTaskTypes.filter((item) => item.active).map((item) => item.name),
+            form.values.type,
+          ].filter(Boolean)))} />
         </Field>
 
         <Field label="Due Date" htmlFor="dueDate" required error={form.field('dueDate').error}>

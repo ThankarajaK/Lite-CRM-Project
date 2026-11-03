@@ -227,6 +227,19 @@ class Notification(models.Model):
         max_length=500,
     )
 
+    # Optional target metadata keeps legacy security/export notifications valid.
+    # record follows the CRM's shared ownership/visibility boundary.
+    record = models.ForeignKey(
+        "Record",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="notifications",
+    )
+    target_type = models.CharField(max_length=32, blank=True, default="")
+    target_id = models.CharField(max_length=64, blank=True, default="")
+    dedupe_key = models.CharField(max_length=255, null=True, blank=True, unique=True)
+
     read_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -574,10 +587,11 @@ class Deal(models.Model):
 
     expected_close_date = models.DateField()
 
-    loss_reason = models.CharField(
-        max_length=100,
-        blank=True,
-    )
+    loss_reason = models.CharField(max_length=100, blank=True)
+    loss_reason_detail = models.TextField(blank=True)
+    contract_start_date = models.DateField(null=True, blank=True)
+    close_note = models.TextField(blank=True)
+    reopened_at = models.DateTimeField(null=True, blank=True)
 
     notes = models.TextField(
         blank=True,
@@ -829,7 +843,52 @@ class ImportBatch(models.Model):
         ordering = ["-created_at"]        
 
 
+
+class WorkspaceConfiguration(models.Model):
+    """Database-backed workspace rules and presentation settings."""
+    name = models.CharField(max_length=150, default="LiteCRM")
+    currency = models.CharField(max_length=3, default="INR")
+    timezone = models.CharField(max_length=64, default="Asia/Kolkata")
+    date_format = models.CharField(max_length=20, default="DD-MM-YYYY")
+    rules = models.JSONField(default=dict)
+    stage_names = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+
+    @classmethod
+    def current(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class BusinessListItem(models.Model):
+    LIST_TYPES = [
+        ("disqualification_reason", "Disqualification reason"),
+        ("loss_reason", "Loss reason"),
+        ("task_type", "Task type"),
+        ("industry", "Industry"),
+    ]
+    list_type = models.CharField(max_length=40, choices=LIST_TYPES)
+    name = models.CharField(max_length=120)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["list_type", "name"]
+        constraints = [models.UniqueConstraint(fields=["list_type", "name"], name="uniq_business_list_item_name")]
+
+
+class ImmutableAuditQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValueError("Audit events are immutable and cannot be updated.")
+
+    def delete(self):
+        raise ValueError("Audit events are immutable and cannot be deleted.")
+
+
 class AuditEvent(models.Model):
+    objects = models.Manager.from_queryset(ImmutableAuditQuerySet)()
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -861,6 +920,41 @@ class AuditEvent(models.Model):
         editable=False,
     )
 
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    browser = models.CharField(max_length=500, blank=True)
+
     created_at = models.DateTimeField(
         auto_now_add=True,
     )
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValueError("Audit events are immutable and cannot be updated.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("Audit events are immutable and cannot be deleted.")
+
+class ExportJob(models.Model):
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        PROCESSING = "processing", "Processing"
+        READY = "ready", "Ready"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="export_jobs")
+    report_key = models.CharField(max_length=80)
+    file_format = models.CharField(max_length=10)
+    filters = models.JSONField(default=dict)
+    columns = models.JSONField(default=list)
+    rows = models.JSONField(default=list)
+    row_count = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED)
+    file_path = models.CharField(max_length=500, blank=True)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]

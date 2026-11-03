@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Briefcase, Plus } from 'lucide-react'
+import { Briefcase, Download, Plus } from 'lucide-react'
 import PageHeader from '../components/ui/PageHeader'
 import ProcessSteps from '../components/layout/ProcessSteps'
 import Button from '../components/ui/Button'
@@ -10,9 +10,11 @@ import Skeleton from '../components/ui/Skeleton'
 import KanbanColumn from '../components/deals/KanbanColumn'
 import DealFormModal from '../components/deals/DealFormModal'
 import DealDrawer from '../components/deals/DealDrawer'
+import Modal from '../components/ui/Modal'
 import LogActivityModal from '../components/contacts/LogActivityModal'
 import { useData } from '../context/DataContext'
 import { useToast } from '../context/ToastContext'
+import { crmApi } from '../lib/api'
 import { useSimulatedLoading } from '../hooks/useSimulatedLoading'
 import { CLOSED_STAGES, DEAL_STAGES, PRODUCTS } from '../data/mockData'
 import { formatCurrency } from '../utils/format'
@@ -42,8 +44,11 @@ export default function Deals() {
     updateDeal,
     updateDealValue,
     moveDeal,
+    reopenDeal,
+    refreshCrm,
     loadLeadTimeline,
     activityPagination,
+    hasPermission,
   } = useData()
 
   const toast = useToast()
@@ -58,9 +63,45 @@ export default function Deals() {
   const [editing, setEditing] = useState(null)
   const [viewing, setViewing] = useState(null)
   const [logging, setLogging] = useState(null)
+  const [closingDeal, setClosingDeal] = useState(null)
+  const [closeForm, setCloseForm] = useState({ loss_reason: '', loss_reason_detail: '', contract_start_date: '', close_note: '' })
+  const [configuredLossReasons, setConfiguredLossReasons] = useState([])
+
+  useEffect(() => {
+    let active = true
+    crmApi.businessConfiguration()
+      .then((config) => {
+        if (active) setConfiguredLossReasons((config.items || []).filter((item) => item.list_type === 'loss_reason'))
+      })
+      .catch((error) => console.warn('Could not load configured loss reasons:', error))
+    return () => { active = false }
+  }, [])
 
   const [draggingDeal, setDraggingDeal] = useState(null)
   const [dropTarget, setDropTarget] = useState(null)
+
+  // Keep other open board sessions in sync with server-side stage changes.
+  // Refresh every 12 seconds so updates are visible within the 15-second PRD limit.
+  useEffect(() => {
+    let active = true
+    const syncBoard = () => {
+      if (document.visibilityState === 'visible') {
+        refreshCrm().catch((error) => {
+          if (active) console.warn('Deal board sync failed:', error)
+        })
+      }
+    }
+    const intervalId = window.setInterval(syncBoard, 12_000)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') syncBoard()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      active = false
+      window.clearInterval(intervalId)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [refreshCrm])
 
   async function openDeal(deal) {
     if (!deal) return
@@ -117,16 +158,24 @@ export default function Deals() {
     [filtered]
   )
 
-  /** How many activities are logged against each record, for the card badge. */
+  /**
+   * How many activities are logged against each contact/record for the card badge.
+   * The deal list supplies the persisted count; a loaded timeline overrides it so
+   * newly logged activity appears immediately without waiting for a full refresh.
+   */
   const activityCounts = useMemo(() => {
     const counts = {}
+
+    deals.forEach((deal) => {
+      counts[deal.recordId] = Number(deal.activityCount) || 0
+    })
 
     Object.entries(activityLog).forEach(([recordId, entries]) => {
       counts[recordId] = entries.length
     })
 
     return counts
-  }, [activityLog])
+  }, [deals, activityLog])
 
   const totals = useMemo(() => {
     const open = filtered.filter(
@@ -144,23 +193,67 @@ export default function Deals() {
 
   async function handleMove(deal, stage) {
     if (!deal || deal.stage === stage) return
+    if (CLOSED_STAGES.includes(stage)) {
+      setClosingDeal({ deal, stage })
+      setCloseForm({ loss_reason: '', loss_reason_detail: '', contract_start_date: '', close_note: '' })
+      return
+    }
 
-    await moveDeal(deal.id, stage)
+    try {
+      await moveDeal(deal.id, stage)
 
-    setViewing((current) =>
-      current?.id === deal.id
-        ? { ...current, stage }
-        : current
-    )
+      setViewing((current) =>
+        current?.id === deal.id
+          ? { ...current, stage }
+          : current
+      )
 
-    const closing = CLOSED_STAGES.includes(stage)
+      const closing = CLOSED_STAGES.includes(stage)
+      toast.success(
+        `Moved to ${stage}`,
+        closing
+          ? `${deal.contact} · value is now locked`
+          : `${deal.contact} · ${deal.product}`
+      )
+    } catch (error) {
+      // moveDeal rehydrates from the server after a failed write; refresh once
+      // more as a best effort if that rehydration itself failed.
+      await refreshCrm().catch(() => {})
+      const reason = error?.message || 'The server could not save this stage change.'
+      toast.error('Deal stage was not changed', reason)
+    }
+  }
 
-    toast.success(
-      `Moved to ${stage}`,
-      closing
-        ? `${deal.contact} · value is now locked`
-        : `${deal.contact} · ${deal.product}`
-    )
+  async function confirmCloseDeal(event) {
+    event.preventDefault()
+    if (!closingDeal) return
+    const { deal, stage } = closingDeal
+    try {
+      await moveDeal(deal.id, stage, closeForm)
+      setViewing((current) => current?.id === deal.id ? {
+        ...current,
+        stage,
+        lossReason: stage === 'Lost' ? closeForm.loss_reason : '',
+        lossReasonDetail: stage === 'Lost' ? closeForm.loss_reason_detail : '',
+        contractStartDate: stage === 'Won' ? closeForm.contract_start_date : '',
+        closeNote: closeForm.close_note,
+        closedAt: new Date().toISOString().slice(0, 10),
+      } : current)
+      toast.success(`Deal closed ${stage}`, `${deal.contact} · value locked`)
+      setClosingDeal(null)
+    } catch (error) {
+      toast.error('Deal was not closed', error?.message || 'The server rejected the closing action.')
+    }
+  }
+
+  async function handleReopen(deal, reason) {
+    try {
+      await reopenDeal(deal.id, reason)
+      setViewing((current) => current?.id === deal.id ? { ...current, stage: 'Negotiation' } : current)
+      toast.success('Deal reopened', `${deal.contact} · moved to Negotiation`)
+    } catch (error) {
+      toast.error('Deal was not reopened', error?.message || 'The server rejected the reopening action.')
+    }
   }
 
   async function moveByOffset(deal, offset) {
@@ -183,27 +276,24 @@ export default function Deals() {
   }
 
   /** Inline value edit from a card or the drawer. */
-  function handleValueChange(deal, nextValue) {
-    const updated = updateDealValue(deal.id, nextValue)
-
-    if (!updated) {
-      toast.error(
-        'Value is locked',
-        `${deal.name} is ${deal.stage}.`
+  async function handleValueChange(deal, nextValue) {
+    try {
+      const updated = await updateDealValue(deal.id, nextValue)
+      setViewing((current) =>
+        current?.id === deal.id
+          ? { ...current, value: updated.value }
+          : current
       )
-      return
+      toast.success(
+        'Deal value updated',
+        `${formatCurrency(deal.value)} → ${formatCurrency(updated.value)}`
+      )
+    } catch (error) {
+      toast.error(
+        'Could not update deal value',
+        error?.message || 'The value was not saved. Please try again.'
+      )
     }
-
-    setViewing((current) =>
-      current?.id === deal.id
-        ? { ...current, value: updated.value }
-        : current
-    )
-
-    toast.success(
-      'Deal value updated',
-      `${formatCurrency(deal.value)} → ${formatCurrency(updated.value)}`
-    )
   }
 
   function handleEditSubmit(values) {
@@ -273,13 +363,10 @@ export default function Deals() {
         title="Deals"
         subtitle="Proposal → Negotiation → Won or Lost. Value is editable until the deal closes."
         actions={
-          <Button
-            icon={Plus}
-            onClick={() => navigate('/contacts')}
-            className="w-full sm:w-auto"
-          >
-            New Deal
-          </Button>
+          <div className="flex flex-wrap gap-2 print:hidden">
+            {hasPermission('export_records') && ['csv', 'xlsx'].map((format) => <Button key={format} variant="secondary" icon={Download} onClick={async () => { try { const result = await crmApi.createExport('deals', format, { search: query, stage: searchParams.get('stage') || '', product }); if (result?.job_id) toast.info('Export queued', `Exporting ${result.row_count} rows. You will be notified when ready.`); else toast.success('Deals exported', `The filtered deal list was downloaded as ${format.toUpperCase()}.`) } catch (err) { toast.error('Export failed', err.message || 'Could not export deals.') } }}>{format === 'csv' ? 'Export CSV' : 'Export Excel'}</Button>)}
+            <Button icon={Plus} onClick={() => navigate('/contacts')} className="w-full sm:w-auto">New Deal</Button>
+          </div>
         }
       />
 
@@ -413,6 +500,41 @@ export default function Deals() {
         </span>
       </div>
 
+      <Modal
+        open={Boolean(closingDeal)}
+        onClose={() => setClosingDeal(null)}
+        title={closingDeal?.stage === 'Lost' ? 'Close deal as Lost' : 'Close deal as Won'}
+        description="Closing locks the deal value and records the outcome in history."
+      >
+        <form onSubmit={confirmCloseDeal} className="space-y-4 p-5">
+          {closingDeal?.stage === 'Lost' ? <>
+            <label className="block text-sm font-medium text-slate-700">Loss reason *
+              <select required value={closeForm.loss_reason} onChange={(e) => setCloseForm((v) => ({ ...v, loss_reason: e.target.value }))} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2">
+                <option value="">Choose a reason</option>
+                {Array.from(new Map([
+                  ['price', 'Price'], ['product_fit', 'Product fit'], ['timing', 'Timing'],
+                  ['competitor', 'Competitor'], ['no_decision', 'No decision'], ['no_response', 'No response'], ['other', 'Other'],
+                  ...configuredLossReasons.filter((item) => item.active).map((item) => [item.name, item.name]),
+                  ...(closeForm.loss_reason ? [[closeForm.loss_reason, closeForm.loss_reason]] : []),
+                ]).entries()).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            {closeForm.loss_reason === 'other' ? <label className="block text-sm font-medium text-slate-700">Explain the other reason *
+              <textarea required minLength={12} value={closeForm.loss_reason_detail} onChange={(e) => setCloseForm((v) => ({ ...v, loss_reason_detail: e.target.value }))} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2" rows={3} placeholder="Write a sentence explaining the loss reason." />
+            </label> : null}
+          </> : <label className="block text-sm font-medium text-slate-700">Contract start date (optional)
+            <input type="date" value={closeForm.contract_start_date} onChange={(e) => setCloseForm((v) => ({ ...v, contract_start_date: e.target.value }))} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2" />
+          </label>}
+          <label className="block text-sm font-medium text-slate-700">Note (optional)
+            <textarea value={closeForm.close_note} onChange={(e) => setCloseForm((v) => ({ ...v, close_note: e.target.value }))} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2" rows={3} />
+          </label>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" type="button" onClick={() => setClosingDeal(null)}>Cancel</Button>
+            <Button type="submit">Confirm {closingDeal?.stage}</Button>
+          </div>
+        </form>
+      </Modal>
+
       {/* Edit deal modal */}
       <DealFormModal
         open={Boolean(editing)}
@@ -457,8 +579,10 @@ export default function Deals() {
         onClose={() => setViewing(null)}
         onEdit={(deal) => setEditing(deal)}
         onMove={handleMove}
+        onReopen={handleReopen}
         onValueChange={handleValueChange}
         onLogActivity={(deal) => setLogging(deal)}
+        hasPermission={hasPermission}
       />
 
       {/* Activity modal */}

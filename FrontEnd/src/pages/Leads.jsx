@@ -47,6 +47,7 @@ import LogActivityModal from "../components/contacts/LogActivityModal";
 
 import { useData } from "../context/DataContext";
 import { useToast } from "../context/ToastContext";
+import { crmApi } from "../lib/api";
 import { api } from "../lib/api";
 import { formatDate } from "../utils/format";
 
@@ -88,6 +89,13 @@ export default function Leads() {
 
   const toast = useToast();
   const navigate = useNavigate();
+  const handleLeadExport = async (format = "csv") => {
+    try {
+      const result = await crmApi.createExport("leads", format, { search: query, status })
+      if (result?.job_id) toast.info("Export queued", `Exporting ${result.row_count} rows. You will be notified when ready.`)
+      else toast.success("Leads exported", `The filtered lead list was downloaded as ${format.toUpperCase()}.`)
+    } catch (err) { toast.error("Export failed", err.message || "Could not export leads.") }
+  };
   const [importOpen, setImportOpen] = useState(false);
 
   /*
@@ -1379,19 +1387,10 @@ export default function Leads() {
             </div>
 
             <div className="flex items-end gap-2">
-              <Button
-                variant="secondary"
-                icon={Download}
-                onClick={() =>
-                  toast.info(
-                    "Export",
-                    "CSV export can be connected to the export_records endpoint when enabled.",
-                  )
-                }
-                className="w-full"
-              >
-                Export
-              </Button>
+              {hasPermission('export_records') && <>
+                <Button variant="secondary" icon={Download} onClick={() => handleLeadExport("csv")} className="w-full">Export CSV</Button>
+                <Button variant="secondary" icon={Download} onClick={() => handleLeadExport("xlsx")} className="w-full">Export Excel</Button>
+              </>}
 
               {hasFilters ? (
                 <Button
